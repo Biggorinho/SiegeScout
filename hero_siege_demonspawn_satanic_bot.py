@@ -645,30 +645,44 @@ def path_delta_from_center(minimap_bgr, center, target_dot):
         return dot_to_screen_delta(target_dot, center)
     return dot_to_screen_delta(waypoint, center)
 
-def choose_attack_move_delta(aim_dx, aim_dy, minimap_bgr, center, recent_angles, strafe_sign, enemy_dist=None, enemy_dot=None):
-    """Pick movement while attacking: mostly kite, sometimes explore."""
+def choose_attack_move_delta(
+    aim_dx, aim_dy, minimap_bgr, center, recent_angles, strafe_sign,
+    enemy_dist=None, enemy_dot=None,
+    enemy_chaser=None,
+    kite_committed_until=0.0, kite_cached_move=None,
+    cached_mask=None,
+):
+    """Pick movement while attacking. Returns (move_delta, strafe_sign, kite_committed_until, kite_cached_move)."""
+    now = time.time()
+
     if enemy_dist is not None and enemy_dist > ATTACK_CHASE_MINIMAP_DIST:
-        # Enemy is still far away on minimap: close distance aggressively.
-        if enemy_dot is not None:
+        if enemy_chaser is not None and enemy_dot is not None:
+            delta = enemy_chaser.get_chase_delta(minimap_bgr, center, enemy_dot, cached_mask=cached_mask)
+            chase_delta = scale_vector(delta[0], delta[1], min_len=170, max_len=300)
+        elif enemy_dot is not None:
             direct_dx, direct_dy = dot_to_screen_delta(enemy_dot, center)
-            # Far chase must not detour: move directly toward the enemy cluster.
-            if direct_dy > 0:
-                direct_dy = int(direct_dy * 1.25)
-            return scale_vector(direct_dx, direct_dy, min_len=170, max_len=300), strafe_sign
-        return scale_vector(aim_dx, aim_dy, min_len=140, max_len=250), strafe_sign
+            chase_delta = scale_vector(direct_dx, direct_dy, min_len=170, max_len=300)
+        else:
+            chase_delta = scale_vector(aim_dx, aim_dy, min_len=140, max_len=250)
+        return chase_delta, strafe_sign, kite_committed_until, kite_cached_move
+
+    if now < kite_committed_until and kite_cached_move is not None:
+        return kite_cached_move, strafe_sign, kite_committed_until, kite_cached_move
 
     if random.random() < ATTACK_KITE_CHANCE and (abs(aim_dx) + abs(aim_dy)) > 20:
-        # Strafe around enemies with slight backstep to keep distance.
         strafe_x = -aim_dy * strafe_sign
         strafe_y = aim_dx * strafe_sign
         move_x = strafe_x - 0.45 * aim_dx
         move_y = strafe_y - 0.45 * aim_dy
-        move = scale_vector(move_x, move_y, min_len=90, max_len=210)
-        return move, -strafe_sign
+        new_move = scale_vector(move_x, move_y, min_len=90, max_len=210)
+        new_strafe = -strafe_sign
+    else:
+        explore_move, _ = choose_explore_delta(minimap_bgr, center, recent_angles, None)
+        new_move = scale_vector(explore_move[0], explore_move[1], min_len=95, max_len=220)
+        new_strafe = strafe_sign
 
-    # Occasionally run a map-guided explore leg while still firing.
-    explore_move, _ = choose_explore_delta(minimap_bgr, center, recent_angles, None)
-    return scale_vector(explore_move[0], explore_move[1], min_len=95, max_len=220), strafe_sign
+    commit_until = now + random.uniform(KITE_COMMIT_MIN_SECONDS, KITE_COMMIT_MAX_SECONDS)
+    return new_move, new_strafe, commit_until, new_move
 
 
 class CompanionSuppressor:
@@ -991,6 +1005,13 @@ def run():
     attack_move_dx, attack_move_dy = random_explore_delta()
     explore_pause_until = 0.0
     last_jump_t = [0.0]
+    enemy_chaser         = EnemyChaser()
+    kite_committed_until = 0.0
+    kite_cached_move     = None
+    last_backtrack_t     = [0.0]
+    explore_heatmap      = ExploreHeatMap()
+    attack_stuck         = StuckDetector(window=ATTACK_STUCK_WINDOW, min_move=ATTACK_STUCK_MIN_MOVE)
+    cached_mask          = None
     companion = CompanionSuppressor()
     minimap_mode = MINIMAP_MODE
 
@@ -1164,7 +1185,7 @@ def run():
 
                 # Keep pressure while repositioning so ranged combat does not pause damage.
                 if (time.time() - last_attack_move_plan_t) > ATTACK_MOVE_REPLAN_SECONDS:
-                    (attack_move_dx, attack_move_dy), attack_strafe_sign = choose_attack_move_delta(
+                    (attack_move_dx, attack_move_dy), attack_strafe_sign, kite_committed_until, kite_cached_move = choose_attack_move_delta(
                         adx,
                         ady,
                         minimap,
@@ -1173,6 +1194,10 @@ def run():
                         attack_strafe_sign,
                         enemy_dist,
                         enemy_dot,
+                        enemy_chaser=enemy_chaser,
+                        kite_committed_until=kite_committed_until,
+                        kite_cached_move=kite_cached_move,
+                        cached_mask=cached_mask,
                     )
                     last_attack_move_plan_t = time.time()
 
