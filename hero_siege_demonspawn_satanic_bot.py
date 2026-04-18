@@ -124,11 +124,12 @@ def find_enemy_dots(minimap_bgr):
         return []
     hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
 
-    # Monster colors (red, purple, gold) with robust thresholds for dark maps.
-    r1 = cv2.inRange(hsv, np.array([0,   135, 125]), np.array([10,  255, 255]))
-    r2 = cv2.inRange(hsv, np.array([170, 135, 125]), np.array([180, 255, 255]))
-    p  = cv2.inRange(hsv, np.array([128,  90, 100]), np.array([160, 255, 255]))
-    y  = cv2.inRange(hsv, np.array([18,  135, 135]), np.array([34,  255, 255]))
+    # Monster colors (red, purple, gold/orange) with robust thresholds for dark maps.
+    r1 = cv2.inRange(hsv, np.array([0,   120, 110]), np.array([10,  255, 255]))
+    r2 = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
+    p  = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
+    # Gold elites can render as deep orange (H~10-18) through bright yellow (H~34).
+    y  = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
 
     mask = cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(r1, r2), p), y)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -141,14 +142,15 @@ def find_enemy_dots(minimap_bgr):
     dots = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if not (4 < area < 180):
+        # Gold elite circles on large minimap can be bigger than regular enemy dots.
+        if not (3 < area < 320):
             continue
         # Only keep roughly circular blobs – filters out companion icons, star shapes, etc.
         perimeter = cv2.arcLength(cnt, True)
         if perimeter == 0:
             continue
         circularity = 4 * math.pi * area / (perimeter ** 2)
-        if circularity < 0.62:
+        if circularity < 0.55:
             continue
         M = cv2.moments(cnt)
         if M["m00"] > 0:
