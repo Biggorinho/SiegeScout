@@ -1117,15 +1117,15 @@ def run():
             dots    = find_enemy_dots(minimap)
             center  = minimap_center_from_image(minimap)
 
-            # Build raw (un-eroded) minimap mask and use it to reject dots that
-            # fall outside the minimap overlay — i.e. game-world false positives.
-            raw_walkable = build_walkable_minimap_mask(minimap)
-            raw_walkable = connected_walkable_mask(raw_walkable, center)
-            if raw_walkable is not None:
-                h_mm, w_mm = raw_walkable.shape[:2]
+            # Reject dots outside the minimap overlay using the raw walkable mask
+            # (no connected-component constraint so enemies in disconnected rooms
+            # are still detected; only game-world false positives are rejected).
+            dot_filter_mask = build_walkable_minimap_mask(minimap)
+            if dot_filter_mask is not None:
+                h_mm, w_mm = dot_filter_mask.shape[:2]
                 dots = [d for d in dots
                         if 0 <= d[0] < w_mm and 0 <= d[1] < h_mm
-                        and raw_walkable[d[1], d[0]] > 0]
+                        and dot_filter_mask[d[1], d[0]] > 0]
 
             companion.update(dots, center)
             filtered_dots = companion.filter(dots)
