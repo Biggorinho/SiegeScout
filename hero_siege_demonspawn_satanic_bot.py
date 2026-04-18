@@ -755,6 +755,70 @@ class CompanionSuppressor:
         return [dot for dot in dots if dot_distance(dot, self._candidate) > self.suppress_radius]
 
 
+class EnemyChaser:
+    """Navigates toward the target enemy using a smoothed A* full-path queue."""
+
+    def __init__(self):
+        self.path_queue = []
+        self.last_enemy_pos = None
+        self.last_dist = None
+        self.no_progress_count = 0
+        self._replan_t = 0.0
+        self._blocked_angles = []
+
+    def reset(self):
+        self.path_queue = []
+        self.last_enemy_pos = None
+        self.last_dist = None
+        self.no_progress_count = 0
+        self._blocked_angles = []
+
+    def get_chase_delta(self, minimap_bgr, center, nearest, cached_mask=None):
+        """Return (dx, dy) screen-space delta toward the enemy using A* path queue."""
+        now = time.time()
+
+        enemy_moved = (
+            self.last_enemy_pos is None
+            or dot_distance(nearest, self.last_enemy_pos) > ENEMY_CHASE_MOVE_THRESHOLD
+        )
+        replan_due = (now - self._replan_t) > ENEMY_CHASE_REPLAN_SECONDS
+
+        cur_dist = dot_distance(nearest, center)
+        if self.last_dist is not None:
+            if cur_dist < self.last_dist - ENEMY_CHASE_PROGRESS_MIN_PX:
+                self.no_progress_count = 0
+            else:
+                self.no_progress_count += 1
+        self.last_dist = cur_dist
+
+        if self.no_progress_count >= ENEMY_CHASE_NO_PROGRESS_MAX:
+            if self.path_queue:
+                adx = self.path_queue[0][0] - center[0]
+                ady = self.path_queue[0][1] - center[1]
+                self._blocked_angles.append(math.atan2(ady, adx))
+                self._blocked_angles = self._blocked_angles[-6:]
+            self.path_queue = []
+            self.no_progress_count = 0
+
+        if self.path_queue:
+            if dot_distance(self.path_queue[0], center) < PATH_WAYPOINT_REACH_PX:
+                self.path_queue.pop(0)
+
+        if not self.path_queue or enemy_moved or replan_due:
+            mask = cached_mask if cached_mask is not None else buffered_walkable_mask(minimap_bgr, center)
+            if mask is not None:
+                raw = _a_star_full_path(mask, center, nearest)
+                if raw:
+                    self.path_queue = smooth_path(raw, mask)
+            self.last_enemy_pos = nearest
+            self._replan_t = now
+
+        if not self.path_queue:
+            return dot_to_screen_delta(nearest, center)
+
+        return dot_to_screen_delta(self.path_queue[0], center)
+
+
 def sleep_interruptible(duration, step=0.02):
     """Sleep in short slices; return False if user requested pause/stop."""
     end_t = time.time() + max(0.0, duration)

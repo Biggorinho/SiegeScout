@@ -77,3 +77,23 @@ def test_heatmap_resets_on_shape_change():
     assert hm.penalty(20, 20) > 0.0
     hm.update((20, 20), (100, 100))
     assert hm.penalty(20, 20) == 0.0
+
+from hero_siege_demonspawn_satanic_bot import EnemyChaser
+import numpy as np
+
+def test_enemy_chaser_returns_tuple():
+    chaser = EnemyChaser()
+    mask = np.full((80, 80), 255, dtype=np.uint8)
+    minimap = np.full((80, 80, 3), (180, 180, 180), dtype=np.uint8)
+    center = (40, 40)
+    nearest = (60, 30)
+    delta = chaser.get_chase_delta(minimap, center, nearest, cached_mask=mask)
+    assert isinstance(delta, tuple)
+    assert len(delta) == 2
+
+def test_enemy_chaser_fallback_on_no_mask():
+    chaser = EnemyChaser()
+    center = (40, 40)
+    nearest = (60, 30)
+    delta = chaser.get_chase_delta(None, center, nearest, cached_mask=None)
+    assert isinstance(delta, tuple)
