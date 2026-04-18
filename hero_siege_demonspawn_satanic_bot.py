@@ -1097,22 +1097,38 @@ def run():
                 ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
                 stuck.update(pt.x, pt.y)
 
+                explore_heatmap.update(center, minimap.shape[:2])
+
                 replanning_due = (time.time() - last_explore_plan_t) > EXPLORE_REPLAN_SECONDS
-                if replanning_due or stuck.is_stuck():
-                    if stuck.is_stuck():
-                        now = time.time()
-                        if (now - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
-                            print("Stuck – neue Minimap-Richtung")
-                            last_stuck_log_t = now
-                        current_angle = math.atan2(explore_dy, explore_dx)
-                        blocked_explore_angles.append(current_angle)
-                        blocked_explore_angles = blocked_explore_angles[-8:]
+
+                if stuck.is_stuck():
+                    now = time.time()
+                    if (now - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
+                        print("Stuck – neue Minimap-Richtung")
+                        last_stuck_log_t = now
+                    backtrack_move(explore_dx, explore_dy, last_backtrack_t)
+                    current_angle = math.atan2(explore_dy, explore_dx)
+                    blocked_explore_angles.append(current_angle)
+                    blocked_explore_angles = blocked_explore_angles[-8:]
+                    replanning_due = True
+
+                if replanning_due:
                     (explore_dx, explore_dy), target = choose_explore_delta(minimap, center, recent_explore_angles, blocked_explore_angles)
                     if target is not None:
                         angle = math.atan2(target[1] - center[1], target[0] - center[0])
                         recent_explore_angles.append(angle)
                         recent_explore_angles = recent_explore_angles[-6:]
                     last_explore_plan_t = time.time()
+
+                if cached_mask is not None:
+                    walk_score = ray_walkability_score(cached_mask, center, (center[0] + explore_dx, center[1] + explore_dy), samples=14)
+                    if walk_score < 0.55:
+                        (explore_dx, explore_dy), target = choose_explore_delta(minimap, center, recent_explore_angles, blocked_explore_angles)
+                        if target is not None:
+                            angle = math.atan2(target[1] - center[1], target[0] - center[0])
+                            recent_explore_angles.append(angle)
+                            recent_explore_angles = recent_explore_angles[-6:]
+                        last_explore_plan_t = time.time()
 
                 wasd_move(
                     explore_dx,
