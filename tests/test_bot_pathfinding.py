@@ -21,3 +21,41 @@ def test_buffered_mask_smaller_than_unbuffered():
     buffered = buffered_walkable_mask(img, center)
     if raw is not None and buffered is not None:
         assert buffered.sum() <= raw.sum()
+
+from hero_siege_demonspawn_satanic_bot import _a_star_full_path, smooth_path
+
+def _open_mask(size=(40, 40)):
+    import numpy as np
+    return np.full(size, 255, dtype=np.uint8)
+
+def _mask_with_wall(size=(40, 40), wall_col=20):
+    import numpy as np
+    mask = np.full(size, 255, dtype=np.uint8)
+    # Wall must be PATH_GRID_STEP (3) pixels wide so it survives downsampling.
+    # Zero out columns wall_col-1 .. wall_col+1 to guarantee one grid column is blocked.
+    mask[:, wall_col - 1:wall_col + 2] = 0
+    return mask
+
+def test_full_path_open_area_returns_list():
+    mask = _open_mask()
+    path = _a_star_full_path(mask, (2, 2), (36, 36))
+    assert path is not None
+    assert len(path) >= 2
+    assert path[0] != path[-1]
+
+def test_full_path_unreachable_returns_none():
+    mask = _mask_with_wall()
+    path = _a_star_full_path(mask, (2, 20), (36, 20))
+    assert path is None
+
+def test_smooth_path_shortens_straight_line():
+    mask = _open_mask()
+    path = [(i * 3, i * 3) for i in range(10)]
+    result = smooth_path(path, mask)
+    assert len(result) <= len(path)
+
+def test_smooth_path_identity_on_short_path():
+    mask = _open_mask()
+    path = [(0, 0), (5, 5)]
+    result = smooth_path(path, mask)
+    assert len(result) == 2

@@ -527,6 +527,92 @@ def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_st
     return (wx * step + step // 2, wy * step + step // 2)
 
 
+def _a_star_full_path(mask, center, target, step=PATH_GRID_STEP):
+    """Return full A* path as list of minimap (x, y) coords from center to target, or None."""
+    if mask is None or mask.size == 0:
+        return None
+
+    grid = (mask[::step, ::step] > 0)
+    gh, gw = grid.shape
+    if gh == 0 or gw == 0:
+        return None
+
+    sx = int(max(0, min(gw - 1, center[0] // step)))
+    sy = int(max(0, min(gh - 1, center[1] // step)))
+    tx = int(max(0, min(gw - 1, target[0] // step)))
+    ty = int(max(0, min(gh - 1, target[1] // step)))
+
+    s = _nearest_walkable_cell(grid, sx, sy)
+    t = _nearest_walkable_cell(grid, tx, ty)
+    if s is None or t is None:
+        return None
+    if s == t:
+        return [target]
+
+    neighbors = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
+                 (-1, -1, 1.414), (-1, 1, 1.414), (1, -1, 1.414), (1, 1, 1.414)]
+
+    open_heap = []
+    heapq.heappush(open_heap, (0.0, s))
+    g_score = {s: 0.0}
+    came_from = {}
+    closed = set()
+
+    def h_cost(a, b):
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    while open_heap:
+        _, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == t:
+            break
+        closed.add(current)
+        ncx, ncy = current
+        for dx, dy, c in neighbors:
+            nx2, ny2 = ncx + dx, ncy + dy
+            if not (0 <= nx2 < gw and 0 <= ny2 < gh):
+                continue
+            if not grid[ny2, nx2]:
+                continue
+            nxt = (nx2, ny2)
+            tentative = g_score[current] + c
+            if tentative < g_score.get(nxt, float('inf')):
+                came_from[nxt] = current
+                g_score[nxt] = tentative
+                f = tentative + h_cost(nxt, t)
+                heapq.heappush(open_heap, (f, nxt))
+
+    if t not in came_from:
+        return None
+
+    path = [t]
+    cur = t
+    while cur != s:
+        cur = came_from[cur]
+        path.append(cur)
+    path.reverse()
+
+    return [(gx * step + step // 2, gy * step + step // 2) for gx, gy in path]
+
+
+def smooth_path(path, mask):
+    """String-pull an A* path: skip intermediate waypoints when line-of-sight is clear."""
+    if not path or len(path) < 3 or mask is None:
+        return path
+    smoothed = [path[0]]
+    i = 0
+    while i < len(path) - 1:
+        j = len(path) - 1
+        while j > i + 1:
+            if ray_walkability_score(mask, path[i], path[j], samples=20) >= 0.95:
+                break
+            j -= 1
+        smoothed.append(path[j])
+        i = j
+    return smoothed
+
+
 def path_delta_from_center(minimap_bgr, center, target_dot):
     walkable = build_walkable_minimap_mask(minimap_bgr)
     walkable = connected_walkable_mask(walkable, center)
