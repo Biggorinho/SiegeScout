@@ -1062,9 +1062,16 @@ def run():
             companion.update(dots, center)
             filtered_dots = companion.filter(dots)
             if len(filtered_dots) == 1 and dot_distance(filtered_dots[0], center) <= (COMPANION_TRACK_RADIUS * 0.85):
-                # Single near-center dot is often the companion marker.
                 filtered_dots = []
-            nearest = nearest_dot(filtered_dots, center)
+
+            cached_mask = buffered_walkable_mask(minimap, center)
+
+            if len(filtered_dots) > 1 and cached_mask is not None:
+                def _dot_score(dot):
+                    return ray_walkability_score(cached_mask, center, dot, samples=12) * 100 - dot_distance(dot, center) * 0.3
+                nearest = max(filtered_dots, key=_dot_score)
+            else:
+                nearest = nearest_dot(filtered_dots, center)
 
             # Enemy detection has highest priority while not fleeing.
             if state != State.FLEE and nearest:
