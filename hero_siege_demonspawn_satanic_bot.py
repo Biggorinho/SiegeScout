@@ -110,11 +110,10 @@ ENABLE_LOOT = False
 
 
 class State(Enum):
-    EXPLORE  = "EXPLORE"
-    APPROACH = "APPROACH"
-    ATTACK   = "ATTACK"
-    LOOT     = "LOOT"
-    FLEE     = "FLEE"
+    EXPLORE = "EXPLORE"
+    ATTACK  = "ATTACK"
+    LOOT    = "LOOT"
+    FLEE    = "FLEE"
 
 
 # ── DETECTORS ─────────────────────────────────────────────────────────────────
@@ -1136,31 +1135,6 @@ def run():
                     random.uniform(EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS),
                 )
                 maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t)
-
-            elif state == State.APPROACH:
-                if not attack_held:
-                    left_mouse_down()
-                    attack_held = True
-
-                if not nearest:
-                    if attack_held:
-                        left_mouse_up()
-                        attack_held = False
-                    state = State.EXPLORE
-                    state_start = time.time()
-                    continue
-
-                dist = dot_distance(nearest, center)
-                if dist <= ATTACK_RANGE_PX:
-                    print("In Reichweite -> ATTACK")
-                    state = State.ATTACK
-                    state_start = time.time()
-                    last_enemy_seen_t = time.time()
-                    continue
-
-                dx, dy = dot_to_screen_delta(nearest, center)
-                last_flee_dir = (-dx, -dy)
-                wasd_move_and_attack(dx, dy, duration=0.30)
 
             elif state == State.ATTACK:
                 if not attack_held:
