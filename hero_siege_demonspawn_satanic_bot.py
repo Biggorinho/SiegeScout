@@ -851,6 +851,16 @@ def wasd_move(dx, dy, duration=0.9):
             keyboard.release(k)
 
 
+def backtrack_move(dx, dy, last_backtrack_t):
+    """Reverse briefly to escape a corner. `last_backtrack_t` is a one-element list used as mutable ref."""
+    now = time.time()
+    if now - last_backtrack_t[0] < STUCK_BACKTRACK_COOLDOWN:
+        return
+    duration = random.uniform(STUCK_BACKTRACK_DURATION_MIN, STUCK_BACKTRACK_DURATION_MAX)
+    wasd_move(-dx, -dy, duration)
+    last_backtrack_t[0] = now
+
+
 def left_mouse_down():
     ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # LEFTDOWN
 
