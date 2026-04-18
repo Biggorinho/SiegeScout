@@ -309,6 +309,19 @@ def connected_walkable_mask(mask, center):
     return connected
 
 
+def buffered_walkable_mask(minimap_bgr, center):
+    """Build walkable mask with wall buffer so A* paths stay away from edges."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return None
+    mask = build_walkable_minimap_mask(minimap_bgr)
+    mask = connected_walkable_mask(mask, center)
+    if mask is None:
+        return None
+    if WALL_BUFFER_ITERATIONS > 0:
+        mask = cv2.erode(mask, np.ones((3, 3), dtype=np.uint8), iterations=WALL_BUFFER_ITERATIONS)
+    return mask
+
+
 def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=None):
     """Pick an exploration target from bright/open minimap regions."""
     if minimap_bgr is None or minimap_bgr.size == 0:
