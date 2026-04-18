@@ -11,6 +11,8 @@ import os
 import heapq
 from enum import Enum
 
+DEBUG_DIR = "debug"
+
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 SCREEN_W, SCREEN_H = 1920, 1080
 
@@ -972,6 +974,51 @@ def attack_toward(dx, dy):
     ctypes.windll.user32.SetCursorPos(tx, ty)
 
 
+# ── DEBUG ─────────────────────────────────────────────────────────────────────
+
+def _debug_save_minimap(minimap_bgr, dots_raw, companion_dot, filtered_dots, nearest, center, frame_idx):
+    """Save annotated minimap frame to debug/ folder for inspection."""
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    img = minimap_bgr.copy()
+    cx, cy = center
+
+    # Blue cross = player center
+    cv2.drawMarker(img, (cx, cy), (255, 100, 0), cv2.MARKER_CROSS, 14, 2)
+
+    # Cyan = all raw dots before companion filter
+    for d in dots_raw:
+        cv2.circle(img, d, 5, (255, 255, 0), 1)
+
+    # Magenta = suppressed companion dot
+    if companion_dot is not None:
+        cv2.circle(img, companion_dot, 8, (255, 0, 255), 2)
+        cv2.putText(img, "COMP", (companion_dot[0] + 4, companion_dot[1] - 4),
+                    cv2.FONT_HERSHEY_PLAIN, 0.9, (255, 0, 255), 1)
+
+    # Green = dots surviving companion filter
+    for d in filtered_dots:
+        cv2.circle(img, d, 6, (0, 255, 80), 2)
+
+    # Red = selected nearest / attack target
+    if nearest:
+        cv2.circle(img, nearest, 9, (0, 0, 255), 2)
+        cv2.putText(img, "TARGET", (nearest[0] + 4, nearest[1] - 6),
+                    cv2.FONT_HERSHEY_PLAIN, 0.9, (0, 0, 255), 1)
+
+    # Also save the raw HSV color mask so we can see what the detector picks up
+    hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+    r1 = cv2.inRange(hsv, np.array([0,   120, 110]), np.array([10,  255, 255]))
+    r2 = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
+    p  = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
+    y  = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
+    color_mask = cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(r1, r2), p), y)
+    mask_bgr = cv2.cvtColor(color_mask, cv2.COLOR_GRAY2BGR)
+
+    combined = np.hstack([img, mask_bgr])
+    path = os.path.join(DEBUG_DIR, f"dbg_{frame_idx:04d}.png")
+    cv2.imwrite(path, combined)
+
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 
 def run():
@@ -1015,6 +1062,8 @@ def run():
     cached_mask          = None
     companion = CompanionSuppressor()
     minimap_mode = MINIMAP_MODE
+    debug_mode = False
+    debug_frame_idx = 0
 
     with mss.mss() as sct:
         full_mon = {"top": 0, "left": 0, "width": SCREEN_W, "height": SCREEN_H}
@@ -1042,6 +1091,13 @@ def run():
             if keyboard.is_pressed('f6'):
                 minimap_mode = "large" if minimap_mode == "small" else "small"
                 print(f"Minimap mode -> {minimap_mode}")
+                time.sleep(0.35)
+                continue
+            if keyboard.is_pressed('f7'):
+                debug_mode = not debug_mode
+                print(f"DEBUG {'AN' if debug_mode else 'AUS'} | frames -> {DEBUG_DIR}/")
+                if debug_mode:
+                    os.makedirs(DEBUG_DIR, exist_ok=True)
                 time.sleep(0.35)
                 continue
             if paused:
@@ -1073,6 +1129,13 @@ def run():
                 nearest = max(filtered_dots, key=_dot_score)
             else:
                 nearest = nearest_dot(filtered_dots, center)
+
+            if debug_mode:
+                companion_dot = companion._candidate if companion._hits >= companion.confirm_frames else None
+                _debug_save_minimap(minimap, dots, companion_dot, filtered_dots, nearest, center, debug_frame_idx)
+                debug_frame_idx += 1
+                if debug_frame_idx % 10 == 0:
+                    print(f"[DBG] frame={debug_frame_idx} raw={len(dots)} filtered={len(filtered_dots)} nearest={nearest} state={state.value}")
 
             # Enemy detection has highest priority while not fleeing.
             if state != State.FLEE and nearest:
