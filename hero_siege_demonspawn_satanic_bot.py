@@ -1271,8 +1271,25 @@ def run():
                     left_mouse_up()
                     attack_held = False
 
-                fx, fy = last_flee_dir if last_flee_dir != (0, 0) else random_explore_delta()
-                wasd_move(fx, fy, random.uniform(0.5, 1.0))
+                flee_delta = None
+                if cached_mask is not None:
+                    lx, ly = last_flee_dir if last_flee_dir != (0, 0) else random_explore_delta()
+                    flee_len = math.hypot(lx, ly)
+                    if flee_len > 1e-6:
+                        norm_x = lx / flee_len
+                        norm_y = ly / flee_len
+                        cx_mm, cy_mm = center
+                        flee_target = (
+                            int(max(0, min(minimap.shape[1] - 1, cx_mm + norm_x * 40))),
+                            int(max(0, min(minimap.shape[0] - 1, cy_mm + norm_y * 40))),
+                        )
+                        waypoint = _a_star_next_waypoint(cached_mask, center, flee_target)
+                        if waypoint is not None:
+                            flee_delta = dot_to_screen_delta(waypoint, center)
+                if flee_delta is None:
+                    fx, fy = last_flee_dir if last_flee_dir != (0, 0) else random_explore_delta()
+                    flee_delta = (fx, fy)
+                wasd_move(flee_delta[0], flee_delta[1], random.uniform(0.5, 1.0))
 
                 hp = get_hp_percent(frame)
                 if hp >= HP_RESUME_THRESHOLD or (time.time() - state_start) > FLEE_MAX_WAIT:
