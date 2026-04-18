@@ -79,6 +79,21 @@ AIM_MAX_DISTANCE = 280
 # Coarse-grid minimap pathfinding settings.
 PATH_GRID_STEP = 3
 PATH_WAYPOINT_STEPS = 7
+WALL_BUFFER_ITERATIONS        = 1      # Erosion passes on walkable mask (wall clearance)
+PATH_WAYPOINT_REACH_PX        = 8      # Distance to consider a waypoint reached
+STUCK_BACKTRACK_DURATION_MIN  = 0.20   # Min reverse-move duration on stuck
+STUCK_BACKTRACK_DURATION_MAX  = 0.35   # Max reverse-move duration on stuck
+STUCK_BACKTRACK_COOLDOWN      = 0.80   # Seconds between backtrack attempts
+EXPLORE_HEATMAP_CELL_SIZE     = 8      # Minimap pixels per heatmap cell
+EXPLORE_HEATMAP_PENALTY       = 15.0   # Score penalty per visit count
+ENEMY_CHASE_REPLAN_SECONDS    = 0.40   # How often EnemyChaser replans path
+ENEMY_CHASE_MOVE_THRESHOLD    = 10     # Enemy dot px movement to force replan
+ENEMY_CHASE_PROGRESS_MIN_PX   = 4      # Min distance reduction to count as progress
+ENEMY_CHASE_NO_PROGRESS_MAX   = 3      # Replans with no progress before new approach angle
+KITE_COMMIT_MIN_SECONDS       = 0.50   # Min time to hold a kite direction
+KITE_COMMIT_MAX_SECONDS       = 0.80   # Max time to hold a kite direction
+ATTACK_STUCK_WINDOW           = 6      # Frames for attack-phase stuck detector
+ATTACK_STUCK_MIN_MOVE         = 6      # Min minimap px movement to not be stuck
 
 
 # Item templates
