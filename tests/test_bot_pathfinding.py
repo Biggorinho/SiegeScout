@@ -59,3 +59,21 @@ def test_smooth_path_identity_on_short_path():
     path = [(0, 0), (5, 5)]
     result = smooth_path(path, mask)
     assert len(result) == 2
+
+from hero_siege_demonspawn_satanic_bot import ExploreHeatMap
+
+def test_heatmap_penalty_increases_with_visits():
+    hm = ExploreHeatMap(cell_size=8)
+    shape = (80, 80)
+    center = (20, 20)
+    assert hm.penalty(20, 20) == 0.0
+    hm.update(center, shape)
+    hm.update(center, shape)
+    assert hm.penalty(20, 20) > 0.0
+
+def test_heatmap_resets_on_shape_change():
+    hm = ExploreHeatMap(cell_size=8)
+    hm.update((20, 20), (80, 80))
+    assert hm.penalty(20, 20) > 0.0
+    hm.update((20, 20), (100, 100))
+    assert hm.penalty(20, 20) == 0.0

@@ -216,6 +216,27 @@ class StuckDetector:
         return (max(xs) - min(xs) + max(ys) - min(ys)) < self.min_move
 
 
+class ExploreHeatMap:
+    """Tracks visited minimap cells to penalise re-exploration of the same area."""
+
+    def __init__(self, cell_size=EXPLORE_HEATMAP_CELL_SIZE):
+        self.cell_size = cell_size
+        self._visits = {}
+        self._last_shape = None
+
+    def update(self, center, minimap_shape):
+        if self._last_shape is not None and minimap_shape != self._last_shape:
+            self._visits = {}
+        elif self._last_shape is None or minimap_shape == self._last_shape:
+            cell = (center[0] // self.cell_size, center[1] // self.cell_size)
+            self._visits[cell] = self._visits.get(cell, 0) + 1
+        self._last_shape = minimap_shape
+
+    def penalty(self, x, y):
+        cell = (x // self.cell_size, y // self.cell_size)
+        return self._visits.get(cell, 0) * EXPLORE_HEATMAP_PENALTY
+
+
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def minimap_center():
