@@ -1167,6 +1167,17 @@ def run():
                     left_mouse_down()
                     attack_held = True
 
+                attack_stuck.update(center[0], center[1])
+                if attack_stuck.is_stuck():
+                    backtrack_move(attack_move_dx, attack_move_dy, last_backtrack_t)
+                    enemy_chaser.reset()
+                    perp_dx = -attack_move_dy
+                    perp_dy = attack_move_dx
+                    slide_score_pos = ray_walkability_score(cached_mask, center, (center[0] + perp_dx, center[1] + perp_dy), samples=10) if cached_mask is not None else 0.0
+                    slide_score_neg = ray_walkability_score(cached_mask, center, (center[0] - perp_dx, center[1] - perp_dy), samples=10) if cached_mask is not None else 0.0
+                    slide_dx, slide_dy = (perp_dx, perp_dy) if slide_score_pos >= slide_score_neg else (-perp_dx, -perp_dy)
+                    wasd_move_and_attack(slide_dx, slide_dy, duration=0.18, aim_dx=adx, aim_dy=ady)
+
                 enemy_dist = None
                 enemy_dot = None
                 if nearest:
