@@ -1,0 +1,380 @@
+import cv2
+import numpy as np
+import math
+import heapq
+import random
+import time
+
+from config import (
+    PATH_GRID_STEP, PATH_WAYPOINT_STEPS, PATH_WAYPOINT_REACH_PX,
+    PLAYER_EXCLUSION_RADIUS, EXPLORE_HEATMAP_PENALTY,
+    LAST_SEEN_MONSTER_MIN_DIST,
+    LAST_SEEN_MONSTER_FALLBACK_DIST_MIN, LAST_SEEN_MONSTER_FALLBACK_DIST_MAX,
+    ATTACK_KITE_CHANCE, ATTACK_CHASE_MINIMAP_DIST, ATTACK_FLEE_MINIMAP_DIST,
+    ATTACK_BACKPEDAL_STRENGTH, ATTACK_ORBIT_BACKPEDAL_STRENGTH,
+    KITE_COMMIT_MIN_SECONDS, KITE_COMMIT_MAX_SECONDS,
+)
+from minimap import (
+    build_walkable_minimap_mask, connected_walkable_mask, buffered_walkable_mask,
+    dot_distance, dot_to_screen_delta, random_explore_delta,
+)
+
+
+def ray_walkability_score(mask, center, target, samples=16):
+    """Score 0–1 for how much of the path center→target stays on walkable area."""
+    if mask is None or mask.size == 0:
+        return 0.0
+    cx, cy = center
+    tx, ty = target
+    xs = np.linspace(cx, tx, num=samples, dtype=np.int32)
+    ys = np.linspace(cy, ty, num=samples, dtype=np.int32)
+    h, w = mask.shape[:2]
+    weighted_hits = 0.0
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        if 0 <= x < w and 0 <= y < h and mask[y, x] > 0:
+            weighted_hits += 1.0 + (i / max(1, samples - 1)) * 0.5
+    return weighted_hits / samples
+
+
+def _nearest_walkable_cell(grid, gx, gy, radius=6):
+    h, w = grid.shape
+    if 0 <= gx < w and 0 <= gy < h and grid[gy, gx]:
+        return gx, gy
+    best, best_d2 = None, None
+    for yy in range(max(0, gy - radius), min(h, gy + radius + 1)):
+        for xx in range(max(0, gx - radius), min(w, gx + radius + 1)):
+            if not grid[yy, xx]:
+                continue
+            d2 = (xx - gx) ** 2 + (yy - gy) ** 2
+            if best_d2 is None or d2 < best_d2:
+                best, best_d2 = (xx, yy), d2
+    return best
+
+
+def _run_astar(grid, s, t):
+    """Core A* search on a boolean grid. Returns came_from dict or None on failure."""
+    gh, gw = grid.shape
+    neighbors = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
+                 (-1, -1, 1.414), (-1, 1, 1.414), (1, -1, 1.414), (1, 1, 1.414)]
+
+    open_heap = []
+    heapq.heappush(open_heap, (0.0, s))
+    g_score  = {s: 0.0}
+    came_from = {}
+    closed   = set()
+
+    def h(a, b):
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    while open_heap:
+        _, current = heapq.heappop(open_heap)
+        if current in closed:
+            continue
+        if current == t:
+            break
+        closed.add(current)
+        cx, cy = current
+        for dx, dy, c in neighbors:
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < gw and 0 <= ny < gh) or not grid[ny, nx]:
+                continue
+            nxt       = (nx, ny)
+            tentative = g_score[current] + c
+            if tentative < g_score.get(nxt, float('inf')):
+                came_from[nxt] = current
+                g_score[nxt]   = tentative
+                heapq.heappush(open_heap, (tentative + h(nxt, t), nxt))
+
+    return came_from if t in came_from else None
+
+
+def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_steps=PATH_WAYPOINT_STEPS):
+    """Return a waypoint on a walkable A* path from center to target (minimap coords)."""
+    if mask is None or mask.size == 0:
+        return None
+
+    grid = (mask[::step, ::step] > 0)
+    gh, gw = grid.shape
+    if gh == 0 or gw == 0:
+        return None
+
+    sx = int(max(0, min(gw - 1, center[0] // step)))
+    sy = int(max(0, min(gh - 1, center[1] // step)))
+    tx = int(max(0, min(gw - 1, target[0] // step)))
+    ty = int(max(0, min(gh - 1, target[1] // step)))
+
+    s = _nearest_walkable_cell(grid, sx, sy)
+    t = _nearest_walkable_cell(grid, tx, ty)
+    if s is None or t is None:
+        return None
+    if s == t:
+        return target
+
+    came_from = _run_astar(grid, s, t)
+    if came_from is None:
+        return None
+
+    path = [t]
+    cur  = t
+    while cur != s:
+        cur = came_from[cur]
+        path.append(cur)
+    path.reverse()
+
+    idx  = min(waypoint_steps, len(path) - 1)
+    wx, wy = path[idx]
+    return (wx * step + step // 2, wy * step + step // 2)
+
+
+def _a_star_full_path(mask, center, target, step=PATH_GRID_STEP):
+    """Return full A* path as list of minimap (x, y) coords, or None."""
+    if mask is None or mask.size == 0:
+        return None
+
+    grid = (mask[::step, ::step] > 0)
+    gh, gw = grid.shape
+    if gh == 0 or gw == 0:
+        return None
+
+    sx = int(max(0, min(gw - 1, center[0] // step)))
+    sy = int(max(0, min(gh - 1, center[1] // step)))
+    tx = int(max(0, min(gw - 1, target[0] // step)))
+    ty = int(max(0, min(gh - 1, target[1] // step)))
+
+    s = _nearest_walkable_cell(grid, sx, sy)
+    t = _nearest_walkable_cell(grid, tx, ty)
+    if s is None or t is None:
+        return None
+    if s == t:
+        return [target]
+
+    came_from = _run_astar(grid, s, t)
+    if came_from is None:
+        return None
+
+    path = [t]
+    cur  = t
+    while cur != s:
+        cur = came_from[cur]
+        path.append(cur)
+    path.reverse()
+
+    return [(gx * step + step // 2, gy * step + step // 2) for gx, gy in path]
+
+
+def smooth_path(path, mask):
+    """String-pull an A* path: skip intermediate waypoints when line-of-sight is clear."""
+    if not path or len(path) < 3 or mask is None:
+        return path
+    smoothed = [path[0]]
+    i = 0
+    while i < len(path) - 1:
+        j = len(path) - 1
+        while j > i + 1:
+            if ray_walkability_score(mask, path[i], path[j], samples=20) >= 0.95:
+                break
+            j -= 1
+        smoothed.append(path[j])
+        i = j
+    return smoothed
+
+
+def path_delta_from_center(minimap_bgr, center, target_dot, terrain_memory=None):
+    walkable = build_walkable_minimap_mask(minimap_bgr, terrain_memory=terrain_memory)
+    walkable = connected_walkable_mask(walkable, center)
+    if walkable is None:
+        return dot_to_screen_delta(target_dot, center)
+    waypoint = _a_star_next_waypoint(walkable, center, target_dot)
+    if waypoint is None:
+        return dot_to_screen_delta(target_dot, center)
+    return dot_to_screen_delta(waypoint, center)
+
+
+def angle_is_blocked(angle, blocked_angles, tolerance=0.45):
+    if not blocked_angles:
+        return False
+    for blocked in blocked_angles:
+        if abs((angle - blocked + math.pi) % (2 * math.pi) - math.pi) < tolerance:
+            return True
+    return False
+
+
+def scale_vector(dx, dy, min_len=95, max_len=220):
+    """Scale movement vector into a useful WASD magnitude range."""
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return random_explore_delta()
+    factor = random.uniform(min_len, max_len) / length
+    return int(dx * factor), int(dy * factor)
+
+
+def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None):
+    """Pick an exploration target from bright/open minimap regions."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return None
+
+    walkable = build_walkable_minimap_mask(minimap_bgr, terrain_memory=terrain_memory)
+    walkable = connected_walkable_mask(walkable, center)
+    if walkable is None:
+        return None
+
+    hsv         = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+    unknown_fog = cv2.inRange(hsv, np.array([78, 80, 55]), np.array([110, 255, 255]))
+
+    cx, cy = center
+    cv2.circle(walkable, (cx, cy), PLAYER_EXCLUSION_RADIUS + 4, 0, -1)
+
+    contours, _ = cv2.findContours(walkable, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    best_dot, best_score = None, -1.0
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 18:
+            continue
+        points = cnt.reshape(-1, 2)
+        if points.size == 0:
+            continue
+
+        distances = np.sqrt((points[:, 0] - cx) ** 2 + (points[:, 1] - cy) ** 2)
+        idx  = int(np.argmax(distances))
+        tx, ty = int(points[idx][0]), int(points[idx][1])
+        dist = float(distances[idx])
+        if dist < PLAYER_EXCLUSION_RADIUS + 6:
+            continue
+
+        angle = math.atan2(ty - cy, tx - cx)
+        if angle_is_blocked(angle, blocked_angles):
+            continue
+        if recent_angles:
+            min_diff       = min(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
+            repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 35.0
+        else:
+            repeat_penalty = 0.0
+
+        path_score = ray_walkability_score(walkable, center, (tx, ty), samples=18)
+        if path_score < 0.45:
+            continue
+
+        score = dist + (path_score * 120.0) - repeat_penalty
+        if unknown_fog[ty, tx] > 0:
+            score += 70.0
+        if heatmap is not None:
+            score -= heatmap.penalty(tx, ty)
+        if ty > cy + 10 and path_score < 0.75:
+            score -= 20.0
+        if score > best_score:
+            best_score = score
+            best_dot   = (tx, ty)
+
+    return best_dot
+
+
+def choose_explore_delta(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None):
+    dot = minimap_explore_target(
+        minimap_bgr, center, recent_angles, blocked_angles,
+        heatmap=heatmap, terrain_memory=terrain_memory,
+    )
+    if dot is None:
+        return random_explore_delta(), None
+    dx, dy = path_delta_from_center(minimap_bgr, center, dot, terrain_memory=terrain_memory)
+    return (dx, dy), dot
+
+
+def choose_recent_enemy_delta(minimap_bgr, center, recent_enemy_dot=None, recent_enemy_vec=None, terrain_memory=None):
+    """Guide exploration toward the last seen enemy position or direction."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return None, None
+
+    h, w = minimap_bgr.shape[:2]
+
+    def _clamp(x, y):
+        return int(max(0, min(w - 1, x))), int(max(0, min(h - 1, y)))
+
+    candidates = []
+    if recent_enemy_dot is not None:
+        tx, ty = _clamp(*recent_enemy_dot)
+        if dot_distance((tx, ty), center) >= LAST_SEEN_MONSTER_MIN_DIST:
+            candidates.append((tx, ty))
+
+    if recent_enemy_vec is not None:
+        vx, vy = recent_enemy_vec
+        vlen   = math.hypot(vx, vy)
+        if vlen > 1e-6:
+            d  = random.randint(LAST_SEEN_MONSTER_FALLBACK_DIST_MIN, LAST_SEEN_MONSTER_FALLBACK_DIST_MAX)
+            tx = int(center[0] + (vx / vlen) * d)
+            ty = int(center[1] + (vy / vlen) * d)
+            tx, ty = _clamp(tx, ty)
+            if dot_distance((tx, ty), center) >= LAST_SEEN_MONSTER_MIN_DIST:
+                candidates.append((tx, ty))
+
+    if not candidates:
+        return None, None
+
+    walkable   = buffered_walkable_mask(minimap_bgr, center)
+    if terrain_memory is not None:
+        walkable = terrain_memory.apply(walkable)
+    best, best_score = None, -1.0
+
+    for target in candidates:
+        if walkable is not None:
+            path_score = ray_walkability_score(walkable, center, target, samples=18)
+            if path_score < 0.35:
+                continue
+            score = (path_score * 100.0) + min(45.0, dot_distance(target, center) * 0.18)
+        else:
+            score = dot_distance(target, center)
+
+        if score > best_score:
+            best_score = score
+            best       = target
+
+    if best is None:
+        return None, None
+
+    dx, dy = path_delta_from_center(minimap_bgr, center, best, terrain_memory=terrain_memory)
+    return (dx, dy), best
+
+
+def choose_attack_move_delta(
+    aim_dx, aim_dy, minimap_bgr, center, recent_angles, strafe_sign,
+    enemy_dist=None, kite_committed_until=0.0, kite_cached_move=None,
+    terrain_memory=None,
+):
+    """Pick movement while attacking: approach when far, orbit at range, flee when close.
+    Returns (move_delta, strafe_sign, kite_committed_until, kite_cached_move)."""
+    now = time.time()
+
+    if enemy_dist is not None and enemy_dist < ATTACK_FLEE_MINIMAP_DIST and (abs(aim_dx) + abs(aim_dy)) > 10:
+        flee_x = -aim_dx * ATTACK_BACKPEDAL_STRENGTH
+        flee_y = -aim_dy * ATTACK_BACKPEDAL_STRENGTH
+        return scale_vector(flee_x, flee_y, min_len=150, max_len=280), strafe_sign, 0.0, None
+
+    if enemy_dist is not None and enemy_dist > ATTACK_CHASE_MINIMAP_DIST and (abs(aim_dx) + abs(aim_dy)) > 10:
+        approach_strafe = strafe_sign if random.random() < 0.7 else -strafe_sign
+        move_x = 0.88 * aim_dx + 0.32 * (-aim_dy * approach_strafe)
+        move_y = 0.88 * aim_dy + 0.32 * ( aim_dx * approach_strafe)
+        approach_delta = scale_vector(move_x, move_y, min_len=95, max_len=190)
+        return approach_delta, approach_strafe, now + random.uniform(0.35, 0.60), approach_delta
+
+    if now < kite_committed_until and kite_cached_move is not None:
+        return kite_cached_move, strafe_sign, kite_committed_until, kite_cached_move
+
+    if random.random() < ATTACK_KITE_CHANCE and (abs(aim_dx) + abs(aim_dy)) > 20:
+        strafe_x  = -aim_dy * strafe_sign
+        strafe_y  =  aim_dx * strafe_sign
+        move_x    = strafe_x - ATTACK_ORBIT_BACKPEDAL_STRENGTH * aim_dx
+        move_y    = strafe_y - ATTACK_ORBIT_BACKPEDAL_STRENGTH * aim_dy
+        new_move  = scale_vector(move_x, move_y, min_len=90, max_len=210)
+        new_strafe = -strafe_sign
+    else:
+        explore_move, _ = choose_explore_delta(
+            minimap_bgr, center, recent_angles, None, terrain_memory=terrain_memory
+        )
+        new_move   = scale_vector(explore_move[0], explore_move[1], min_len=95, max_len=220)
+        new_strafe = strafe_sign
+
+    commit_until = now + random.uniform(KITE_COMMIT_MIN_SECONDS, KITE_COMMIT_MAX_SECONDS)
+    return new_move, new_strafe, commit_until, new_move

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.log
+
+.venv/
+.claude/
+
+# Local runtime outputs
+debug/
