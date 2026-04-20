@@ -43,6 +43,7 @@ from config import (
     COMPANION_TRACK_RADIUS,
     RESET_DIAG_PRINT_INTERVAL_SECONDS,
     ATTACK_IDLE_VOTE_RESET_SECONDS,
+    ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS,
     ITEM_TEMPLATE_PATHS, ENABLE_LOOT,
 )
 from detectors import (
@@ -57,9 +58,9 @@ from minimap import (
 )
 from pathfinding import (
     ray_walkability_score, choose_explore_delta, choose_recent_enemy_delta,
-    choose_attack_move_delta, _a_star_next_waypoint,
+    choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
 )
-from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor
+from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     left_mouse_down, left_mouse_up,
@@ -112,6 +113,9 @@ def run():
     kite_cached_move             = None
     last_backtrack_t             = [0.0]
     explore_heatmap              = ExploreHeatMap()
+    sector_tracker               = SectorTracker()
+    escape_committed_until       = 0.0
+    escape_dx, escape_dy         = 0, 0
     terrain_memory               = TerrainMemory()
     attack_stuck                 = StuckDetector(window=ATTACK_STUCK_WINDOW, min_move=ATTACK_STUCK_MIN_MOVE)
     cached_mask                  = None
@@ -163,6 +167,7 @@ def run():
         nonlocal zone_started_t, zone_opening_rightclick_pending, state, state_start
         nonlocal explore_pause_until, death_screen_frames, hp_zero_since
         nonlocal last_explore_plan_t, explore_dx, explore_dy, last_explore_target
+        nonlocal escape_committed_until, escape_dx, escape_dy
         last_vote_reset_t             = time.time()
         zone_transition_until         = last_vote_reset_t + ZONE_TRANSITION_FREEZE_SECONDS
         last_attack_activity_t        = zone_transition_until
@@ -188,6 +193,9 @@ def run():
         blocked_explore_angles.clear()
         explore_heatmap.reset()
         terrain_memory.reset()
+        sector_tracker.reset()
+        escape_committed_until = 0.0
+        escape_dx, escape_dy   = 0, 0
 
     with mss.mss() as sct:
         full_mon = {"top": 0, "left": 0, "width": SCREEN_W, "height": SCREEN_H}
@@ -307,6 +315,7 @@ def run():
                     blocked_explore_angles,
                     heatmap=explore_heatmap,
                     terrain_memory=terrain_memory,
+                    sector_tracker=sector_tracker,
                 )
                 if opening_move is not None:
                     opening_dx, opening_dy = opening_move
@@ -314,7 +323,8 @@ def run():
                 if opening_target is not None:
                     angle = math.atan2(opening_target[1] - opening_center[1], opening_target[0] - opening_center[0])
                     recent_explore_angles.append(angle)
-                    recent_explore_angles = recent_explore_angles[-6:]
+                    recent_explore_angles = recent_explore_angles[-12:]
+                    sector_tracker.update(angle)
                     last_explore_target = opening_target
 
                 cast_opening_buff_sequence(opening_dx, opening_dy)
@@ -458,6 +468,7 @@ def run():
                 last_enemy_seen_t    = now_loop
                 stuck_no_enemy_count = 0
                 no_enemy_frames      = 0
+                escape_committed_until = 0.0
             else:
                 no_enemy_frames += 1
 
@@ -658,12 +669,18 @@ def run():
                 replanning_due   = (time.time() - last_explore_plan_t) > EXPLORE_REPLAN_SECONDS
                 explore_is_stuck = stuck.is_stuck()
 
-                if explore_is_stuck:
+                # Honour escape commitment — hold escape direction, suppress replanning.
+                if now_loop < escape_committed_until:
+                    explore_dx, explore_dy = escape_dx, escape_dy
+                    replanning_due         = False
+                    explore_is_stuck       = False
+
+                if explore_is_stuck and now_loop >= escape_committed_until:
                     now = time.time()
                     if not confirmed_enemy_now and hard_stuck_since == 0.0:
                         hard_stuck_since = now
                     if (now - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
-                        print("Stuck – neue Minimap-Richtung")
+                        print("Stuck – Oktan-Escape")
                         last_stuck_log_t = now
                     if not confirmed_enemy_now and \
                             (now - last_stuck_count_t) >= STUCK_COUNT_EVENT_COOLDOWN_SECONDS:
@@ -674,6 +691,13 @@ def run():
                         maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t, force_aim=True)
                     blocked_explore_angles.append(math.atan2(explore_dy, explore_dx))
                     blocked_explore_angles = blocked_explore_angles[-8:]
+                    # Octant escape: pick best walkable direction excluding current
+                    esc_dx, esc_dy = octant_escape_delta(
+                        cached_mask, center, explore_dx, explore_dy)
+                    explore_dx, explore_dy = esc_dx, esc_dy
+                    escape_dx, escape_dy   = esc_dx, esc_dy
+                    escape_committed_until = now_loop + random.uniform(
+                        ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS)
                     replanning_due = True
                 else:
                     hard_stuck_since       = 0.0
@@ -694,18 +718,19 @@ def run():
                     if target is None:
                         (explore_dx, explore_dy), target = choose_explore_delta(
                             minimap, center, recent_explore_angles, blocked_explore_angles,
-                            heatmap=explore_heatmap, terrain_memory=terrain_memory)
+                            heatmap=explore_heatmap, terrain_memory=terrain_memory,
+                            sector_tracker=sector_tracker)
                     if target is not None:
                         angle = math.atan2(target[1] - center[1], target[0] - center[0])
                         recent_explore_angles.append(angle)
-                        recent_explore_angles = recent_explore_angles[-6:]
+                        recent_explore_angles = recent_explore_angles[-12:]
+                        sector_tracker.update(angle)
                         last_explore_target = target
                     last_explore_plan_t = time.time()
 
-                if cached_mask is not None:
+                if cached_mask is not None and last_explore_target is not None:
                     walk_score = ray_walkability_score(
-                        cached_mask, center,
-                        (center[0] + explore_dx, center[1] + explore_dy), samples=14)
+                        cached_mask, center, last_explore_target, samples=14)
                     if walk_score < 0.55:
                         recent_enemy_valid = (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
                         target = None
@@ -721,11 +746,13 @@ def run():
                         if target is None:
                             (explore_dx, explore_dy), target = choose_explore_delta(
                                 minimap, center, recent_explore_angles, blocked_explore_angles,
-                                heatmap=explore_heatmap, terrain_memory=terrain_memory)
+                                heatmap=explore_heatmap, terrain_memory=terrain_memory,
+                                sector_tracker=sector_tracker)
                         if target is not None:
                             angle = math.atan2(target[1] - center[1], target[0] - center[0])
                             recent_explore_angles.append(angle)
-                            recent_explore_angles = recent_explore_angles[-6:]
+                            recent_explore_angles = recent_explore_angles[-12:]
+                            sector_tracker.update(angle)
                             last_explore_target = target
                         last_explore_plan_t = time.time()
 
