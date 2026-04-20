@@ -104,6 +104,7 @@ class SectorTracker:
         self._updates = 0
 
     def _angle_to_sector(self, angle):
+        # Sectors are left-inclusive: sector i covers [i*45°, (i+1)*45°).
         normalized = angle % (2 * math.pi)
         return int(normalized / (2 * math.pi) * self.SECTOR_COUNT) % self.SECTOR_COUNT
 
@@ -111,7 +112,7 @@ class SectorTracker:
         sector = self._angle_to_sector(angle)
         self._visits[sector] = min(20, self._visits[sector] + 1)
         self._updates += 1
-        if self._updates % self._decay_every == 0:
+        if self._decay_every and self._updates % self._decay_every == 0:
             self._visits = [max(0, v - 1) for v in self._visits]
 
     def visits(self, sector):
