@@ -91,7 +91,7 @@ class ExploreHeatMap:
 class SectorTracker:
     """Counts explore visits per 45° compass sector to penalise re-explored directions."""
 
-    SECTOR_COUNT = 4
+    SECTOR_COUNT = 8
 
     def __init__(self, decay_every=SECTOR_TRACKER_DECAY_EVERY, penalty_per_visit=SECTOR_TRACKER_PENALTY):
         self._visits  = [0] * self.SECTOR_COUNT

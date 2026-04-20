@@ -13,8 +13,8 @@ def test_sector_for_east():
 
 def test_sector_for_south():
     st = SectorTracker()
-    # angle=π/2 (south) → sector 1
-    assert st._angle_to_sector(math.pi / 2) == 1
+    # angle=π/2 (east-ish in screen coords) → sector 2 with 8 sectors
+    assert st._angle_to_sector(math.pi / 2) == 2
 
 
 def test_update_increments_sector():
