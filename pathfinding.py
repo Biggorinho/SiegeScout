@@ -240,14 +240,17 @@ def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, sam
 
 
 def path_delta_from_center(minimap_bgr, center, target_dot, terrain_memory=None):
-    walkable = build_walkable_minimap_mask(minimap_bgr, terrain_memory=terrain_memory)
-    walkable = connected_walkable_mask(walkable, center)
-    if walkable is None:
-        return dot_to_screen_delta(target_dot, center)
-    waypoint = _a_star_next_waypoint(walkable, center, target_dot)
-    if waypoint is None:
-        return dot_to_screen_delta(target_dot, center)
-    return dot_to_screen_delta(waypoint, center)
+    for buf in (WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0):
+        walkable = build_walkable_minimap_mask(minimap_bgr, terrain_memory=terrain_memory)
+        walkable = connected_walkable_mask(walkable, center)
+        if walkable is None:
+            return dot_to_screen_delta(target_dot, center)
+        if buf > 0:
+            walkable = cv2.erode(walkable, np.ones((3, 3), dtype=np.uint8), iterations=buf)
+        waypoint = _a_star_next_waypoint(walkable, center, target_dot)
+        if waypoint is not None:
+            return dot_to_screen_delta(waypoint, center)
+    return dot_to_screen_delta(target_dot, center)
 
 
 def angle_is_blocked(angle, blocked_angles, tolerance=0.45):
@@ -268,7 +271,7 @@ def scale_vector(dx, dy, min_len=95, max_len=220):
     return int(dx * factor), int(dy * factor)
 
 
-def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None):
+def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None, sector_tracker=None):
     """Pick an exploration target from bright/open minimap regions."""
     if minimap_bgr is None or minimap_bgr.size == 0:
         return None
@@ -310,9 +313,12 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
             continue
         if recent_angles:
             min_diff       = min(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
-            repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 35.0
+            repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 80.0
         else:
             repeat_penalty = 0.0
+
+        if sector_tracker is not None:
+            repeat_penalty += sector_tracker.penalty(angle)
 
         path_score = ray_walkability_score(walkable, center, (tx, ty), samples=18)
         if path_score < 0.45:
@@ -320,7 +326,7 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
 
         score = dist + (path_score * 120.0) - repeat_penalty
         if unknown_fog[ty, tx] > 0:
-            score += 70.0
+            score += 150.0
         if heatmap is not None:
             score -= heatmap.penalty(tx, ty)
         if ty > cy + 10 and path_score < 0.75:
@@ -332,10 +338,10 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
     return best_dot
 
 
-def choose_explore_delta(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None):
+def choose_explore_delta(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None, sector_tracker=None):
     dot = minimap_explore_target(
         minimap_bgr, center, recent_angles, blocked_angles,
-        heatmap=heatmap, terrain_memory=terrain_memory,
+        heatmap=heatmap, terrain_memory=terrain_memory, sector_tracker=sector_tracker,
     )
     if dot is None:
         return random_explore_delta(), None
