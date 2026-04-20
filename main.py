@@ -707,7 +707,8 @@ def run():
                     blocked_explore_angles = blocked_explore_angles[-8:]
                     # Octant escape: pick best walkable direction excluding current
                     esc_dx, esc_dy = octant_escape_delta(
-                        cached_mask, center, explore_dx, explore_dy)
+                        cached_mask, center, explore_dx, explore_dy,
+                        recent_angles=recent_explore_angles)
                     explore_dx, explore_dy = esc_dx, esc_dy
                     escape_dx, escape_dy   = esc_dx, esc_dy
                     escape_committed_until = now_loop + random.uniform(

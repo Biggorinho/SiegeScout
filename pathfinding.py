@@ -202,10 +202,13 @@ def adaptive_walkable_mask(minimap_bgr, center, target=None):
     return last_mask
 
 
-def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, samples=14):
+def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, samples=14,
+                        recent_angles=None):
     """Test 8 compass directions; return screen-space delta for the most walkable one.
 
     Excludes directions within 45° of current_dx/dy (the direction that failed).
+    Penalises directions that are the reverse of recent explore angles so the
+    bot does not escape by walking back toward spawn.
     """
     if mask is None:
         return random_explore_delta()
@@ -228,6 +231,13 @@ def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, sam
         tx = int(max(0, min(w - 1, center[0] + math.cos(angle) * probe_dist)))
         ty = int(max(0, min(h - 1, center[1] + math.sin(angle) * probe_dist)))
         score = ray_walkability_score(mask, center, (tx, ty), samples=samples)
+        # Penalise directions that are the reverse of recent travel
+        if recent_angles:
+            min_rev_diff = min(
+                abs((angle - (a + math.pi) + math.pi) % (2 * math.pi) - math.pi)
+                for a in recent_angles
+            )
+            score -= max(0.0, (0.55 - min_rev_diff) / 0.55) * 0.40
         if score > best_score:
             best_score = score
             best_angle = angle
@@ -314,6 +324,10 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
         if recent_angles:
             min_diff       = min(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
             repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 80.0
+            # Penalise the reverse of recent directions so the bot doesn't drift
+            # back toward spawn when forward directions are over-penalised.
+            min_rev_diff   = min(abs((angle - (a + math.pi) + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
+            repeat_penalty += max(0.0, (0.55 - min_rev_diff) / 0.55) * 65.0
         else:
             repeat_penalty = 0.0
 
