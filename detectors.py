@@ -65,31 +65,57 @@ def classify_enemy_dots(minimap_bgr):
         val_mean = float(np.mean(patch[:, :, 2]))
         return val_mean >= COMPANION_WHITE_MIN_V and sat_mean <= COMPANION_WHITE_MAX_S
 
-    def _append_from_mask(mask, tier, kind, area_min, area_max, circularity_min):
+    # Blobs larger than this (px²) are treated as merged-enemy groups and split
+    # via distance-transform peak detection rather than a single centre-of-mass.
+    _SINGLE_DOT_MAX_AREA = 65
+
+    def _peaks_in_blob(mask, bx, by, bw, bh):
+        """Return (cx, cy) list of distance-transform local maxima inside a bbox."""
+        crop = mask[by:by + bh, bx:bx + bw]
+        dist = cv2.distanceTransform(crop, cv2.DIST_L2, 3)
+        # Suppress non-maxima with a window slightly larger than one dot radius
+        kernel = np.ones((9, 9), np.uint8)
+        dilated = cv2.dilate(dist, kernel)
+        peak_px = np.uint8((dist == dilated) & (dist > 1.0)) * 255
+        n, _, _, centroids = cv2.connectedComponentsWithStats(peak_px, connectivity=8)
+        return [(int(centroids[i][0]) + bx, int(centroids[i][1]) + by)
+                for i in range(1, n)]
+
+    def _append_from_mask(mask, tier, kind, area_min, circularity_min):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if not (area_min < area < area_max):
+            if area < area_min:
                 continue
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
+            # Hard cap — anything larger than ~50 merged dots is noise / UI element
+            if area > 4000:
                 continue
-            circularity = 4 * math.pi * area / (perimeter ** 2)
-            if circularity < circularity_min:
-                continue
-            M = cv2.moments(cnt)
-            if M["m00"] <= 0:
-                continue
-            cx = int(M["m10"] / M["m00"])
-            cy = int(M["m01"] / M["m00"])
-            if _looks_like_white_companion(cnt, ((cx - cx0) ** 2 + (cy - cy0) ** 2) ** 0.5 <= white_suppress_radius):
-                continue
-            _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
 
-    _append_from_mask(skull, ENEMY_TIER_SKULL, "skull", 10, 360, 0.18)
-    _append_from_mask(y, ENEMY_TIER_YELLOW, "yellow", 3, 320, 0.45)
-    _append_from_mask(p, ENEMY_TIER_PURPLE, "purple", 3, 320, 0.45)
-    _append_from_mask(cv2.bitwise_or(r1, r2), ENEMY_TIER_RED, "red", 3, 320, 0.45)
+            if area <= _SINGLE_DOT_MAX_AREA:
+                # Small blob: use centre-of-mass with circularity guard
+                perimeter = cv2.arcLength(cnt, True)
+                if perimeter == 0:
+                    continue
+                if 4 * math.pi * area / (perimeter ** 2) < circularity_min:
+                    continue
+                M = cv2.moments(cnt)
+                if M["m00"] <= 0:
+                    continue
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                if _looks_like_white_companion(cnt, ((cx - cx0) ** 2 + (cy - cy0) ** 2) ** 0.5 <= white_suppress_radius):
+                    continue
+                _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
+            else:
+                # Large merged blob: split via distance-transform peaks
+                bx, by, bw, bh = cv2.boundingRect(cnt)
+                for cx, cy in _peaks_in_blob(mask, bx, by, bw, bh):
+                    _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
+
+    _append_from_mask(skull, ENEMY_TIER_SKULL, "skull", 10, 0.18)
+    _append_from_mask(y, ENEMY_TIER_YELLOW, "yellow", 3, 0.45)
+    _append_from_mask(p, ENEMY_TIER_PURPLE, "purple", 3, 0.45)
+    _append_from_mask(cv2.bitwise_or(r1, r2), ENEMY_TIER_RED, "red", 3, 0.45)
 
     return dots
 
@@ -151,6 +177,47 @@ def is_world_map_visible(frame_bgr):
     blue_ratio   = float(np.count_nonzero(blue_nodes)) / blue_nodes.size
     purple_ratio = float(np.count_nonzero(purple_bg))  / purple_bg.size
     return blue_ratio > 0.0008 and purple_ratio > 0.10
+
+
+def is_pause_menu_visible(frame_bgr):
+    """Detect ESC pause menu by stacked red button rows in the center area."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+
+    h, w = frame_bgr.shape[:2]
+    x0, x1 = int(w * 0.28), int(w * 0.72)
+    y0, y1 = int(h * 0.28), int(h * 0.78)
+    roi = frame_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    r1 = cv2.inRange(hsv, np.array([0, 85, 60]), np.array([18, 255, 255]))
+    r2 = cv2.inRange(hsv, np.array([166, 85, 60]), np.array([180, 255, 255]))
+    red = cv2.bitwise_or(r1, r2)
+    red = cv2.morphologyEx(red, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8), iterations=1)
+    red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    bar_count = 0
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        area = cv2.contourArea(cnt)
+        if area < 800:
+            continue
+        if bw < int((x1 - x0) * 0.22):
+            continue
+        if not (18 <= bh <= 90):
+            continue
+        if (bw / max(1, bh)) < 2.3:
+            continue
+        # Pause menu buttons are mostly centered horizontally.
+        cx = x + bw * 0.5
+        if abs(cx - (roi.shape[1] * 0.5)) > roi.shape[1] * 0.22:
+            continue
+        bar_count += 1
+
+    return bar_count >= 3
 
 
 def is_death_screen(frame_bgr):

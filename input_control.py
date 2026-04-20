@@ -313,6 +313,51 @@ def maybe_jump_with_movement(move_dx, move_dy, cooldown_tracker, force_aim=False
         cooldown_tracker[0] = now
 
 
+def maybe_jump_stuck_sequence(
+    preferred_dx,
+    preferred_dy,
+    cooldown_tracker,
+    sequence_index_tracker,
+    preferred_pending_tracker,
+):
+    """Stuck jump policy: try blocked-wall direction once, then cycle L/R/U/D."""
+    now = time.time()
+    if now - cooldown_tracker[0] < JUMP_COOLDOWN:
+        return False, None
+
+    if preferred_pending_tracker[0]:
+        preferred_len = math.hypot(preferred_dx, preferred_dy)
+        if preferred_len > 1e-6:
+            try:
+                if _aim_cursor_toward_vector(preferred_dx, preferred_dy):
+                    tap_space()
+                    cooldown_tracker[0] = now
+                    preferred_pending_tracker[0] = False
+                    return True, "wall"
+            except Exception:
+                pass
+        preferred_pending_tracker[0] = False
+
+    sequence = [
+        (-1.0, 0.0, "left"),
+        (1.0, 0.0, "right"),
+        (0.0, -1.0, "up"),
+        (0.0, 1.0, "down"),
+    ]
+    idx = int(sequence_index_tracker[0]) % len(sequence)
+    jump_dx, jump_dy, label = sequence[idx]
+
+    try:
+        if _aim_cursor_toward_vector(jump_dx, jump_dy):
+            tap_space()
+            cooldown_tracker[0] = now
+            sequence_index_tracker[0] = (idx + 1) % len(sequence)
+            return True, label
+    except Exception:
+        pass
+    return False, None
+
+
 def attack_toward(dx, dy):
     cx, cy = SCREEN_W // 2, SCREEN_H // 2
     length = math.hypot(dx, dy)

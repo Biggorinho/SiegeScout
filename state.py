@@ -30,6 +30,9 @@ class StuckDetector:
         self.window    = window
         self.min_move  = min_move
 
+    def reset(self):
+        self.positions.clear()
+
     def update(self, x, y):
         self.positions.append((x, y))
         if len(self.positions) > self.window:
@@ -274,11 +277,16 @@ class EnemyChaser:
         self.last_dist = cur_dist
 
         if self.no_progress_count >= ENEMY_CHASE_NO_PROGRESS_MAX:
+            # Block both the failed waypoint direction and the direct enemy direction
             if self.path_queue:
                 adx = self.path_queue[0][0] - center[0]
                 ady = self.path_queue[0][1] - center[1]
                 self._blocked_angles.append(math.atan2(ady, adx))
-                self._blocked_angles = self._blocked_angles[-6:]
+            direct_dx = nearest[0] - center[0]
+            direct_dy = nearest[1] - center[1]
+            if math.hypot(direct_dx, direct_dy) > 0:
+                self._blocked_angles.append(math.atan2(direct_dy, direct_dx))
+            self._blocked_angles   = self._blocked_angles[-6:]
             self.path_queue        = []
             self.no_progress_count = 0
 

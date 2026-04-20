@@ -24,7 +24,7 @@ from config import (
     DEATH_RESPAWN_POST_CLICK_CHECK_SECONDS,
     CORNER_ESCAPE_BURST_STEP_SECONDS,
 )
-from detectors import grab_frame_bgr, is_world_map_visible, is_death_screen
+from detectors import grab_frame_bgr, is_world_map_visible, is_death_screen, is_pause_menu_visible
 from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
@@ -43,6 +43,17 @@ def wait_for_world_map(sct, full_mon, retry_interact_key=None):
         last_frame = frame
         if is_world_map_visible(frame):
             return True, frame
+
+        # If pause menu is open, close it first or interact key cannot open map.
+        if is_pause_menu_visible(frame):
+            tap_key('esc', hold_time=0.08)
+            if not sleep_interruptible(0.22):
+                return False, last_frame
+            if retry_interact_key:
+                tap_key(retry_interact_key, hold_time=0.08)
+                if not sleep_interruptible(0.22):
+                    return False, last_frame
+            continue
 
         now = time.time()
         if retry_interact_key and now >= next_retry_t:
@@ -296,12 +307,6 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
         if scored is None:
             continue
         score, core_red, ring_red, core_purple, ring_purple, core_blue, ring_blue, hot_core, hot_ring = scored
-        print(
-            f"[SAT] fixed {name}: pos=({x},{y}) score={score:.1f} "
-            f"core_red={core_red:.2f} ring_red={ring_red:.2f} "
-            f"core_purple={core_purple:.2f} ring_purple={ring_purple:.2f} "
-            f"core_blue={core_blue:.2f} ring_blue={ring_blue:.2f}"
-        )
         if score > best_score:
             second_score = best_score
             best_score = score
@@ -361,9 +366,6 @@ def _find_satanic_node(frame_bgr):
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     hotspot = _find_red_hotspot(hsv)
-    if hotspot is not None:
-        print(f"[SAT] hotspot at ({hotspot[0]},{hotspot[1]}) area={hotspot[2]:.0f} red={hotspot[3]:.2f}")
-
     node_mask = cv2.inRange(hsv, np.array([0, 60, 40]), np.array([180, 255, 255]))
     node_mask = cv2.morphologyEx(node_mask, cv2.MORPH_OPEN,  np.ones((2, 2), dtype=np.uint8), iterations=1)
     node_mask = cv2.morphologyEx(node_mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
@@ -375,10 +377,7 @@ def _find_satanic_node(frame_bgr):
     edge_margin_x = int(roi_w * 0.06)
     edge_margin_y = int(roi_h * 0.04)
 
-    print(f"[SAT] node contours={len(contours)}")
-
     if len(contours) > 120:
-        print(f"[SAT] {len(contours)} contours — likely loading screen, skipping")
         return None
 
     for cnt in contours:
@@ -547,6 +546,11 @@ def _reopen_world_map_for_recenter(sct, full_mon):
         tap_key('esc', hold_time=0.08)
         if not sleep_interruptible(0.45):
             return None
+    elif is_pause_menu_visible(current):
+        print("[SAT] recenter: closing pause menu before reopening map")
+        tap_key('esc', hold_time=0.08)
+        if not sleep_interruptible(0.32):
+            return None
     else:
         if not sleep_interruptible(0.15):
             return None
@@ -579,10 +583,24 @@ def run_vote_reset_sequence(sct, full_mon):
             tap_key('esc', hold_time=0.08)
             if not sleep_interruptible(0.35):
                 return False
+    else:
+        # If pause menu is already open, close it so the next ESC opens a fresh menu.
+        if is_pause_menu_visible(frame0):
+            print("[RST] pause menu open -> closing before vote reset menu")
+            tap_key('esc', hold_time=0.08)
+            if not sleep_interruptible(0.35):
+                return False
 
     tap_key('esc', hold_time=VOTE_RESET_ESC_HOLD_SECONDS)
     if not sleep_interruptible(VOTE_RESET_MENU_OPEN_DELAY):
         return False
+
+    # If ESC did not open pause menu (timing race), recover once.
+    frame_menu_check = grab_frame_bgr(sct, full_mon)
+    if not is_pause_menu_visible(frame_menu_check):
+        tap_key('esc', hold_time=VOTE_RESET_ESC_HOLD_SECONDS)
+        if not sleep_interruptible(VOTE_RESET_MENU_OPEN_DELAY):
+            return False
 
     vote_x = int(SCREEN_W * VOTE_RESET_CLICK_X_FRAC)
     vote_y = int(SCREEN_H * VOTE_RESET_CLICK_Y_FRAC)

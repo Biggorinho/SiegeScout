@@ -37,7 +37,7 @@ from config import (
     ZONE_MAX_SECONDS_BEFORE_RESET, ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS,
     ZONE_TRANSITION_FREEZE_SECONDS,
     ZONE_OPENING_KEY3_START_TAPS,
-    DEATH_RESPAWN_COOLDOWN_SECONDS, DEATH_CONFIRM_FRAMES, ENABLE_DEATH_HANDLING,
+    DEATH_RESPAWN_COOLDOWN_SECONDS, DEATH_CONFIRM_FRAMES,
     RESPAWN_TO_RESET_DELAY_SECONDS,
     ENEMY_CONFIRM_FRAMES, ENEMY_LOST_FRAMES,
     LAST_SEEN_MONSTER_MEMORY_SECONDS,
@@ -45,7 +45,7 @@ from config import (
     RESET_DIAG_PRINT_INTERVAL_SECONDS,
     ATTACK_IDLE_VOTE_RESET_SECONDS,
     ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS,
-    ITEM_TEMPLATE_PATHS, ENABLE_LOOT,
+    ITEM_TEMPLATE_PATHS,
 )
 from detectors import (
     classify_enemy_dots, get_hp_percent, find_items_on_screen,
@@ -70,6 +70,7 @@ from input_control import (
     spin_to_clear_melee, cast_opening_buff_sequence,
     tap_key, release_all_inputs,
     _aim_cursor_toward_vector, maybe_jump_with_movement,
+    maybe_jump_stuck_sequence,
     wasd_move_and_attack, perform_attack_sweep,
 )
 from combat import (
@@ -79,7 +80,11 @@ from combat import (
 from debug_utils import save_hard_stuck_snapshot, save_minimap_frame
 
 
-def run():
+def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_mode_override=None):
+    import config as _cfg
+    _enable_loot           = _cfg.ENABLE_LOOT           if enable_loot is None           else enable_loot
+    _enable_death_handling = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
+
     item_templates = []
     for path in ITEM_TEMPLATE_PATHS:
         if os.path.exists(path):
@@ -112,6 +117,12 @@ def run():
     attack_move_dx, attack_move_dy = random_explore_delta()
     explore_pause_until          = 0.0
     last_jump_t                  = [0.0]
+    explore_stuck_jump_seq_idx   = [0]
+    attack_stuck_jump_seq_idx    = [0]
+    explore_stuck_jump_pref      = [False]
+    attack_stuck_jump_pref       = [False]
+    explore_stuck_active         = False
+    attack_stuck_active          = False
     kite_committed_until         = 0.0
     kite_cached_move             = None
     last_backtrack_t             = [0.0]
@@ -124,7 +135,7 @@ def run():
     attack_stuck                 = StuckDetector(window=ATTACK_STUCK_WINDOW, min_move=ATTACK_STUCK_MIN_MOVE)
     cached_mask                  = None
     companion                    = CompanionSuppressor()
-    minimap_mode                 = MINIMAP_MODE
+    minimap_mode                 = minimap_mode_override if minimap_mode_override else MINIMAP_MODE
     debug_mode                   = False
     debug_frame_idx              = 0
     last_attack_activity_t       = time.time()
@@ -152,6 +163,8 @@ def run():
     last_seen_enemy_dot          = None
     last_seen_enemy_vec          = None
     last_seen_enemy_t            = 0.0
+    _log_enemy_count             = -1
+    _log_chase_t                 = 0.0
     last_reset_diag_t            = 0.0
     zone_started_t               = time.time()
     last_death_respawn_t         = 0.0
@@ -173,6 +186,9 @@ def run():
         nonlocal last_explore_plan_t, explore_dx, explore_dy, last_explore_target
         nonlocal escape_committed_until, escape_dx, escape_dy
         nonlocal explore_held_keys
+        nonlocal explore_stuck_active, attack_stuck_active
+        nonlocal explore_stuck_jump_seq_idx, attack_stuck_jump_seq_idx
+        nonlocal explore_stuck_jump_pref, attack_stuck_jump_pref
         last_vote_reset_t             = time.time()
         zone_transition_until         = last_vote_reset_t + ZONE_TRANSITION_FREEZE_SECONDS
         last_attack_activity_t        = zone_transition_until
@@ -202,6 +218,43 @@ def run():
         escape_committed_until = 0.0
         escape_dx, escape_dy   = 0, 0
         explore_held_keys      = explore_move_stop(explore_held_keys)
+        explore_stuck_active   = False
+        attack_stuck_active    = False
+        explore_stuck_jump_seq_idx[0] = 0
+        attack_stuck_jump_seq_idx[0] = 0
+        explore_stuck_jump_pref[0] = False
+        attack_stuck_jump_pref[0] = False
+
+    def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
+        nonlocal state, state_start, hard_stuck_since, escape_committed_until
+        nonlocal next_attack_rightclick_t, next_attack_key3_t, last_attack_sweep_t
+        nonlocal attack_move_dx, attack_move_dy, attack_strafe_sign
+        nonlocal kite_committed_until, kite_cached_move, last_attack_move_plan_t
+        nonlocal zone_opening_rightclick_pending, attack_held
+        nonlocal attack_stuck_active, attack_stuck_jump_pref, attack_stuck_jump_seq_idx
+
+        state                          = State.ATTACK
+        state_start                    = now_loop
+        hard_stuck_since               = 0.0
+        escape_committed_until         = 0.0
+        next_attack_rightclick_t       = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
+        next_attack_key3_t             = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
+        last_attack_sweep_t            = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
+        last_attack_move_plan_t        = 0.0
+        attack_move_dx, attack_move_dy  = adx, ady
+        attack_strafe_sign             = 1
+        kite_committed_until           = 0.0
+        kite_cached_move               = None
+        zone_opening_rightclick_pending = False
+        attack_stuck_active            = False
+        attack_stuck_jump_pref[0]      = False
+        attack_stuck_jump_seq_idx[0]   = 0
+        if attack_held:
+            left_mouse_up()
+            attack_held = False
+        if hold_attack:
+            left_mouse_down()
+            attack_held = True
         enemy_chaser.reset()
 
     with mss.mss() as sct:
@@ -223,6 +276,11 @@ def run():
             now_loop = time.time()
 
             # ── hotkeys ───────────────────────────────────────────────────────
+            if stop_event is not None and stop_event.is_set():
+                release_all_inputs()
+                attack_held = False
+                print("Bot gestoppt (UI).")
+                break
             if keyboard.is_pressed('esc') and now_loop > auto_esc_ignore_until:
                 release_all_inputs()
                 attack_held = False
@@ -282,7 +340,7 @@ def run():
             # This catches both slow deaths and instant kills without false-triggering
             # during normal combat where the bar is clearly visible and healthy.
             _hp_critical = (hp is None or hp <= HP_ZERO_DEAD_THRESHOLD * 5)
-            if ENABLE_DEATH_HANDLING and now_loop >= hp_bar_missing_until and _hp_critical:
+            if _enable_death_handling and now_loop >= hp_bar_missing_until and _hp_critical:
                 if is_death_screen(frame):
                     death_screen_frames += 1
                 else:
@@ -312,12 +370,30 @@ def run():
                 attack_held = False
                 auto_q_ignore_until = time.time() + 0.8
 
+                opening_frame = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
+                opening_hp = get_hp_percent(opening_frame)
+                if opening_hp is None and (now_loop - zone_transition_until) < 4.0:
+                    sleep_interruptible(0.08)
+                    continue
+
+                opening_region   = get_minimap_region(minimap_mode)
+                opening_minimap  = cv2.cvtColor(np.array(sct.grab(opening_region)), cv2.COLOR_BGRA2BGR)
+                opening_center   = minimap_center_from_image(opening_minimap)
+                opening_dots = classify_enemy_dots(opening_minimap)
+
+                if opening_dots:
+                    opening_nearest = max(
+                        opening_dots,
+                        key=lambda entry: (entry[2], -dot_distance((entry[0], entry[1]), opening_center)),
+                    )
+                    adx, ady = dot_to_screen_delta((opening_nearest[0], opening_nearest[1]), opening_center)
+                    print("[OPEN] enemy visible at zone start -> skip buff and attack")
+                    _enter_attack_mode(now_loop, adx, ady, hold_attack=True)
+                    continue
+
                 # Precompute an opening move from minimap pathfinding so the spin
                 # starts into a walkable lane instead of a random corner direction.
                 opening_dx, opening_dy = explore_dx, explore_dy
-                opening_region = get_minimap_region(minimap_mode)
-                opening_minimap = cv2.cvtColor(np.array(sct.grab(opening_region)), cv2.COLOR_BGRA2BGR)
-                opening_center = minimap_center_from_image(opening_minimap)
                 terrain_memory.update(opening_minimap)
                 (opening_move, opening_target) = choose_explore_delta(
                     opening_minimap,
@@ -432,6 +508,19 @@ def run():
                 (dot[0], dot[1], tier_by_dot.get((dot[0], dot[1]), 1))
                 for dot in filtered_dots
             ]
+
+            n_enemies = len(filtered_enemy_dots)
+            if n_enemies != _log_enemy_count:
+                _log_enemy_count = n_enemies
+                if n_enemies > 0:
+                    from detectors import ENEMY_TIER_SKULL, ENEMY_TIER_YELLOW, ENEMY_TIER_PURPLE, ENEMY_TIER_RED
+                    _tier_names = {ENEMY_TIER_SKULL: "skull", ENEMY_TIER_YELLOW: "yellow",
+                                   ENEMY_TIER_PURPLE: "purple", ENEMY_TIER_RED: "red"}
+                    _counts = {}
+                    for _, _, t in filtered_enemy_dots:
+                        _counts[t] = _counts.get(t, 0) + 1
+                    _summary = " ".join(f"{v}x{_tier_names.get(k,'?')}" for k, v in sorted(_counts.items(), reverse=True))
+                    print(f"[DETECT] {n_enemies} enem{'y' if n_enemies==1 else 'ies'}: {_summary}")
 
             cached_mask = buffered_walkable_mask(minimap, center)
             if cached_mask is not None:
@@ -648,14 +737,9 @@ def run():
                 last_enemy_seen_t = time.time()
                 if state != State.ATTACK:
                     print("Gegner gefunden -> ATTACK (Prio)")
-                    state            = State.ATTACK
-                    state_start      = time.time()
-                    hard_stuck_since       = 0.0
-                    escape_committed_until = 0.0
-                    next_attack_rightclick_t = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
-                    next_attack_key3_t       = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
-                    last_attack_sweep_t      = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
+                    _enter_attack_mode(now_loop, adx, ady, hold_attack=True)
                     enemy_chaser.reset()
+                    attack_stuck.reset()
                     _aim_cursor_toward_vector(adx, ady)
                     continue
 
@@ -690,19 +774,31 @@ def run():
                     explore_is_stuck       = False
 
                 if explore_is_stuck and now_loop >= escape_committed_until:
+                    if not explore_stuck_active:
+                        explore_stuck_active = True
+                        explore_stuck_jump_pref[0] = True
                     now = time.time()
                     if not confirmed_enemy_now and hard_stuck_since == 0.0:
                         hard_stuck_since = now
                     if (now - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
-                        print("Stuck – Oktan-Escape")
                         last_stuck_log_t = now
+                        _esc_ang = math.degrees(math.atan2(explore_dy, explore_dx))
+                        print(f"[STUCK] octant-escape was={_esc_ang:.0f}°")
                     if not confirmed_enemy_now and \
                             (now - last_stuck_count_t) >= STUCK_COUNT_EVENT_COOLDOWN_SECONDS:
                         stuck_no_enemy_count += 1
                         last_stuck_count_t    = now
                     backtrack_move(explore_dx, explore_dy, last_backtrack_t)
                     if now_loop >= rightclick_busy_until:
-                        maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t, force_aim=True)
+                        jumped, jump_dir = maybe_jump_stuck_sequence(
+                            explore_dx, explore_dy,
+                            last_jump_t,
+                            explore_stuck_jump_seq_idx,
+                            explore_stuck_jump_pref,
+                        )
+                        if jumped and (now - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
+                            print(f"[STUCK-JUMP] explore -> {jump_dir}")
+                            last_stuck_log_t = now
                     blocked_explore_angles.append(math.atan2(explore_dy, explore_dx))
                     blocked_explore_angles = blocked_explore_angles[-8:]
                     # Octant escape: pick best walkable direction excluding current
@@ -717,10 +813,13 @@ def run():
                 elif now_loop >= escape_committed_until:
                     hard_stuck_since       = 0.0
                     corner_escape_attempts = 0
+                    explore_stuck_active   = False
+                    explore_stuck_jump_pref[0] = False
 
                 if replanning_due:
                     recent_enemy_valid = (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
                     target = None
+                    _guided = False
                     if recent_enemy_valid:
                         (guided_move, target) = choose_recent_enemy_delta(
                             minimap, center,
@@ -730,12 +829,16 @@ def run():
                         )
                         if guided_move is not None:
                             explore_dx, explore_dy = guided_move
+                            _guided = True
                     if target is None:
                         (explore_dx, explore_dy), target = choose_explore_delta(
                             minimap, center, recent_explore_angles, blocked_explore_angles,
                             heatmap=explore_heatmap, terrain_memory=terrain_memory,
                             sector_tracker=sector_tracker)
                     if target is not None:
+                        _ang_deg = math.degrees(math.atan2(explore_dy, explore_dx))
+                        _method  = "guided-enemy" if _guided else "free"
+                        print(f"[PATH] replan {_method} -> {_ang_deg:.0f}° target=({target[0]},{target[1]})")
                         angle = math.atan2(target[1] - center[1], target[0] - center[0])
                         recent_explore_angles.append(angle)
                         recent_explore_angles = recent_explore_angles[-12:]
@@ -748,6 +851,7 @@ def run():
                     walk_score = ray_walkability_score(
                         cached_mask, center, last_explore_target, samples=14)
                     if walk_score < 0.55:
+                        print(f"[PATH] walk-score {walk_score:.2f} -> replan")
                         recent_enemy_valid = (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
                         target = None
                         if recent_enemy_valid:
@@ -800,6 +904,9 @@ def run():
 
                 attack_stuck.update(center[0], center[1])
                 if attack_stuck.is_stuck():
+                    if not attack_stuck_active:
+                        attack_stuck_active = True
+                        attack_stuck_jump_pref[0] = True
                     attack_age = now_loop - state_start
                     if attack_age < ATTACK_STUCK_ARM_SECONDS:
                         if (now_loop - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
@@ -814,15 +921,17 @@ def run():
                             last_stuck_count_t    = now_loop
                     backtrack_move(attack_move_dx, attack_move_dy, last_backtrack_t)
                     if now_loop >= rightclick_busy_until:
-                        if confirmed_enemy_now:
-                            _aim_cursor_toward_vector(adx, ady, distance=400)
-                            keyboard.press('space')
-                            time.sleep(0.04)
-                            keyboard.release('space')
-                            last_jump_t[0] = now_loop
-                        else:
-                            maybe_jump_with_movement(attack_move_dx, attack_move_dy,
-                                                     last_jump_t, force_aim=True)
+                        pref_dx = adx if confirmed_enemy_now else attack_move_dx
+                        pref_dy = ady if confirmed_enemy_now else attack_move_dy
+                        jumped, jump_dir = maybe_jump_stuck_sequence(
+                            pref_dx, pref_dy,
+                            last_jump_t,
+                            attack_stuck_jump_seq_idx,
+                            attack_stuck_jump_pref,
+                        )
+                        if jumped and (now_loop - last_stuck_log_t) > STUCK_LOG_COOLDOWN:
+                            print(f"[STUCK-JUMP] attack -> {jump_dir}")
+                            last_stuck_log_t = now_loop
                     perp_dx = -attack_move_dy
                     perp_dy =  attack_move_dx
                     if cached_mask is not None:
@@ -841,6 +950,8 @@ def run():
                 elif confirmed_enemy_now:
                     hard_stuck_since       = 0.0
                     corner_escape_attempts = 0
+                    attack_stuck_active    = False
+                    attack_stuck_jump_pref[0] = False
 
                 enemy_dist = None
                 if confirmed_enemy_now and nearest:
@@ -856,7 +967,7 @@ def run():
                     if attack_held:
                         left_mouse_up()
                         attack_held = False
-                    if ENABLE_LOOT:
+                    if _enable_loot:
                         print("Gegner tot -> LOOT")
                         state = State.LOOT
                     else:
@@ -902,6 +1013,10 @@ def run():
                         chase_dx, chase_dy = enemy_chaser.get_chase_delta(
                             minimap, center, nearest, cached_mask)
                         attack_move_dx, attack_move_dy = chase_dx, chase_dy
+                        if now_loop - _log_chase_t >= 2.0:
+                            _log_chase_t = now_loop
+                            _ang = math.degrees(math.atan2(chase_dy, chase_dx))
+                            print(f"[PATH] A* chase dist={enemy_dist:.0f}px -> {_ang:.0f}°")
                     last_attack_move_plan_t = time.time()
 
                 wasd_move_and_attack(
