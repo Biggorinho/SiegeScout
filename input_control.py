@@ -123,6 +123,25 @@ def wasd_move(dx, dy, duration=0.9):
             keyboard.release(k)
 
 
+def explore_move_start(dx, dy, held_keys=frozenset()):
+    """Hold WASD keys for (dx, dy) without releasing between ticks.
+    Releases only the keys that changed, presses new ones.
+    Returns the new frozenset of held keys."""
+    new_keys = frozenset(_direction_keys(dx, dy))
+    for k in held_keys - new_keys:
+        keyboard.release(k)
+    for k in new_keys - held_keys:
+        keyboard.press(k)
+    return new_keys
+
+
+def explore_move_stop(held_keys=frozenset()):
+    """Release all held WASD explore keys. Returns empty frozenset."""
+    for k in held_keys:
+        keyboard.release(k)
+    return frozenset()
+
+
 def backtrack_move(dx, dy, last_backtrack_t):
     """Reverse briefly to escape a corner. `last_backtrack_t` is a one-element mutable list."""
     now = time.time()

@@ -64,6 +64,7 @@ from pathfinding import (
 from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
+    explore_move_start, explore_move_stop,
     left_mouse_down, left_mouse_up,
     cast_right_click_skill, cast_key3_skill_safe,
     spin_to_clear_melee, cast_opening_buff_sequence,
@@ -100,6 +101,7 @@ def run():
     last_enemy_seen_t  = 0.0
     adx, ady           = 0, 0
     explore_dx, explore_dy       = random_explore_delta()
+    explore_held_keys            = frozenset()
     last_explore_plan_t          = 0.0
     recent_explore_angles        = []
     blocked_explore_angles       = []
@@ -169,6 +171,7 @@ def run():
         nonlocal explore_pause_until, death_screen_frames, hp_zero_since
         nonlocal last_explore_plan_t, explore_dx, explore_dy, last_explore_target
         nonlocal escape_committed_until, escape_dx, escape_dy
+        nonlocal explore_held_keys
         last_vote_reset_t             = time.time()
         zone_transition_until         = last_vote_reset_t + ZONE_TRANSITION_FREEZE_SECONDS
         last_attack_activity_t        = zone_transition_until
@@ -197,6 +200,7 @@ def run():
         sector_tracker.reset()
         escape_committed_until = 0.0
         escape_dx, escape_dy   = 0, 0
+        explore_held_keys      = explore_move_stop(explore_held_keys)
 
     with mss.mss() as sct:
         full_mon = {"top": 0, "left": 0, "width": SCREEN_W, "height": SCREEN_H}
@@ -251,6 +255,10 @@ def run():
             if paused:
                 time.sleep(0.1)
                 continue
+
+            # Release held explore keys whenever we leave EXPLORE state
+            if state != State.EXPLORE and explore_held_keys:
+                explore_held_keys = explore_move_stop(explore_held_keys)
 
             # ── zone transition freeze ────────────────────────────────────────
             if now_loop < zone_transition_until:
@@ -759,8 +767,8 @@ def run():
                             last_explore_target = target
                         last_explore_plan_t = time.time()
 
-                wasd_move(explore_dx, explore_dy,
-                          random.uniform(EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS))
+                explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
+                sleep_interruptible(random.uniform(EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS))
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t)
 
