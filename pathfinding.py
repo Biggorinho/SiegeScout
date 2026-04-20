@@ -240,7 +240,7 @@ def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, sam
 
 
 def path_delta_from_center(minimap_bgr, center, target_dot, terrain_memory=None):
-    for buf in (WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0):
+    for buf in dict.fromkeys((WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0)):
         walkable = build_walkable_minimap_mask(minimap_bgr, terrain_memory=terrain_memory)
         walkable = connected_walkable_mask(walkable, center)
         if walkable is None:
