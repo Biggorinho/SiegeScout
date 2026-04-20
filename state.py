@@ -11,6 +11,7 @@ from config import (
     ENEMY_CHASE_REPLAN_SECONDS, ENEMY_CHASE_MOVE_THRESHOLD,
     ENEMY_CHASE_PROGRESS_MIN_PX, ENEMY_CHASE_NO_PROGRESS_MAX,
     PATH_WAYPOINT_REACH_PX,
+    SECTOR_TRACKER_DECAY_EVERY, SECTOR_TRACKER_PENALTY,
 )
 from minimap import dot_distance, dot_to_screen_delta, build_raw_walkable_minimap_mask
 from pathfinding import buffered_walkable_mask, _a_star_full_path, smooth_path
@@ -85,6 +86,40 @@ class ExploreHeatMap:
     def penalty(self, x, y):
         cell = (x // self.cell_size, y // self.cell_size)
         return self._visits.get(cell, 0) * EXPLORE_HEATMAP_PENALTY
+
+
+class SectorTracker:
+    """Counts explore visits per 45° compass sector to penalise re-explored directions."""
+
+    SECTOR_COUNT = 4
+
+    def __init__(self, decay_every=SECTOR_TRACKER_DECAY_EVERY, penalty_per_visit=SECTOR_TRACKER_PENALTY):
+        self._visits  = [0] * self.SECTOR_COUNT
+        self._updates = 0
+        self._decay_every      = decay_every
+        self.penalty_per_visit = penalty_per_visit
+
+    def reset(self):
+        self._visits  = [0] * self.SECTOR_COUNT
+        self._updates = 0
+
+    def _angle_to_sector(self, angle):
+        normalized = angle % (2 * math.pi)
+        return int(normalized / (2 * math.pi) * self.SECTOR_COUNT) % self.SECTOR_COUNT
+
+    def update(self, angle):
+        sector = self._angle_to_sector(angle)
+        self._visits[sector] = min(20, self._visits[sector] + 1)
+        self._updates += 1
+        if self._updates % self._decay_every == 0:
+            self._visits = [max(0, v - 1) for v in self._visits]
+
+    def visits(self, sector):
+        return self._visits[sector]
+
+    def penalty(self, angle):
+        sector = self._angle_to_sector(angle)
+        return self._visits[sector] * self.penalty_per_visit
 
 
 class TerrainMemory:
