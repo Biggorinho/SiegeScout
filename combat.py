@@ -540,9 +540,16 @@ def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
 def _reopen_world_map_for_recenter(sct, full_mon):
     """Close and reopen world map once to recenter map position."""
     print("[SAT] recenter: closing and reopening world map")
-    tap_key('esc', hold_time=0.08)
-    if not sleep_interruptible(0.45):
-        return None
+    # Only close with Esc if the map is actually open right now.
+    # Pressing Esc when no map is open would open the pause menu instead.
+    current = grab_frame_bgr(sct, full_mon)
+    if is_world_map_visible(current):
+        tap_key('esc', hold_time=0.08)
+        if not sleep_interruptible(0.45):
+            return None
+    else:
+        if not sleep_interruptible(0.15):
+            return None
     tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
     if not sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.25):
         return None
@@ -557,13 +564,21 @@ def run_vote_reset_sequence(sct, full_mon):
     """Open ESC menu, vote reset, open map, pick red satanic node, fallback to fixed node."""
     release_all_inputs()
 
-    # If world map is currently open, close it first so ESC reliably opens pause menu.
+    # Ensure we start from clean gameplay state (no menus open).
+    # Close world map if visible, or close any stray pause menu with a second check.
     frame0 = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(frame0):
         print("[RST] world map open -> closing before vote reset menu")
         tap_key('esc', hold_time=0.08)
-        if not sleep_interruptible(0.35):
+        if not sleep_interruptible(0.45):
             return False
+        # Verify world map actually closed; if Esc opened a different menu, close that too.
+        frame_check = grab_frame_bgr(sct, full_mon)
+        if is_world_map_visible(frame_check):
+            print("[RST] map still visible after close attempt – retrying Esc")
+            tap_key('esc', hold_time=0.08)
+            if not sleep_interruptible(0.35):
+                return False
 
     tap_key('esc', hold_time=VOTE_RESET_ESC_HOLD_SECONDS)
     if not sleep_interruptible(VOTE_RESET_MENU_OPEN_DELAY):
@@ -611,7 +626,9 @@ def pick_zone_from_open_map(sct, full_mon, frame=None):
     # Use the same deterministic recenter flow as respawn handling before scans.
     recentered_frame = _reopen_world_map_for_recenter(sct, full_mon)
     red_node = None
-    scan_frame = recentered_frame if recentered_frame is not None else frame
+    # If recenter failed, always grab a fresh frame — never use the pre-vote-reset
+    # frame which shows the old zone with no red satanic node highlighted.
+    scan_frame = recentered_frame if recentered_frame is not None else grab_frame_bgr(sct, full_mon)
     for attempt in range(1, SATANIC_NODE_SCAN_ATTEMPTS + 1):
         if scan_frame is None:
             scan_frame = grab_frame_bgr(sct, full_mon)
