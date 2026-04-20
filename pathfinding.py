@@ -383,11 +383,16 @@ def choose_recent_enemy_delta(minimap_bgr, center, recent_enemy_dot=None, recent
     if terrain_memory is not None:
         walkable = terrain_memory.apply(walkable)
     best, best_score = None, -1.0
+    vec_fallback = None  # direction-only fallback when ray is blocked by fog/walls
 
     for target in candidates:
+        is_vec_candidate = (recent_enemy_dot is None or target != _clamp(*recent_enemy_dot))
         if walkable is not None:
             path_score = ray_walkability_score(walkable, center, target, samples=18)
-            if path_score < 0.35:
+            if path_score < 0.20:
+                # Ray is mostly blocked — keep as fallback if it came from the vector
+                if is_vec_candidate and vec_fallback is None:
+                    vec_fallback = target
                 continue
             score = (path_score * 100.0) + min(45.0, dot_distance(target, center) * 0.18)
         else:
@@ -397,6 +402,10 @@ def choose_recent_enemy_delta(minimap_bgr, center, recent_enemy_dot=None, recent
             best_score = score
             best       = target
 
+    # If both scored candidates failed the threshold, still honour the combat direction
+    # rather than returning None and letting the caller fall back to generic exploration.
+    if best is None:
+        best = vec_fallback
     if best is None:
         return None, None
 
