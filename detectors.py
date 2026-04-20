@@ -87,9 +87,9 @@ def classify_enemy_dots(minimap_bgr):
             _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
 
     _append_from_mask(skull, ENEMY_TIER_SKULL, "skull", 10, 360, 0.18)
-    _append_from_mask(y, ENEMY_TIER_YELLOW, "yellow", 3, 320, 0.55)
-    _append_from_mask(p, ENEMY_TIER_PURPLE, "purple", 3, 320, 0.55)
-    _append_from_mask(cv2.bitwise_or(r1, r2), ENEMY_TIER_RED, "red", 3, 320, 0.55)
+    _append_from_mask(y, ENEMY_TIER_YELLOW, "yellow", 3, 320, 0.45)
+    _append_from_mask(p, ENEMY_TIER_PURPLE, "purple", 3, 320, 0.45)
+    _append_from_mask(cv2.bitwise_or(r1, r2), ENEMY_TIER_RED, "red", 3, 320, 0.45)
 
     return dots
 

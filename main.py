@@ -19,7 +19,7 @@ from config import (
     HEALTH_POTION_BURST_MIN_HP, HEALTH_POTION_BURST_MAX_HP,
     HEALTH_POTION_BURST_COUNT, HEALTH_POTION_BURST_GAP_SECONDS,
     ATTACK_LOST_GRACE, ATTACK_TIMEOUT, LOOT_TIMEOUT, FLEE_MAX_WAIT,
-    ATTACK_MOVE_REPLAN_SECONDS,
+    ATTACK_MOVE_REPLAN_SECONDS, ATTACK_CHASE_MINIMAP_DIST,
     ATTACK_RIGHTCLICK_INTERVAL_SECONDS, ATTACK_KEY3_INTERVAL_SECONDS,
     ATTACK_SWEEP_INTERVAL_SECONDS, ATTACK_SWEEP_DURATION_SECONDS, ATTACK_SWEEP_RADIUS,
     ATTACK_NO_CONFIRMED_ENEMY_TIMEOUT_SECONDS,
@@ -61,7 +61,7 @@ from pathfinding import (
     ray_walkability_score, choose_explore_delta, choose_recent_enemy_delta,
     choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
 )
-from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker
+from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
@@ -116,6 +116,7 @@ def run():
     kite_cached_move             = None
     last_backtrack_t             = [0.0]
     explore_heatmap              = ExploreHeatMap()
+    enemy_chaser                 = EnemyChaser()
     sector_tracker               = SectorTracker()
     escape_committed_until       = 0.0
     escape_dx, escape_dy         = 0, 0
@@ -201,6 +202,7 @@ def run():
         escape_committed_until = 0.0
         escape_dx, escape_dy   = 0, 0
         explore_held_keys      = explore_move_stop(explore_held_keys)
+        enemy_chaser.reset()
 
     with mss.mss() as sct:
         full_mon = {"top": 0, "left": 0, "width": SCREEN_W, "height": SCREEN_H}
@@ -653,6 +655,8 @@ def run():
                     next_attack_rightclick_t = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
                     next_attack_key3_t       = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
                     last_attack_sweep_t      = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
+                    enemy_chaser.reset()
+                    _aim_cursor_toward_vector(adx, ady)
                     continue
 
             # ── opening key-3 drip taps ───────────────────────────────────────
@@ -892,6 +896,11 @@ def run():
                         kite_cached_move=kite_cached_move,
                         terrain_memory=terrain_memory,
                     )
+                    # Override linear approach with A* when enemy is far — navigates around walls
+                    if confirmed_enemy_now and nearest and enemy_dist > ATTACK_CHASE_MINIMAP_DIST:
+                        chase_dx, chase_dy = enemy_chaser.get_chase_delta(
+                            minimap, center, nearest, cached_mask)
+                        attack_move_dx, attack_move_dy = chase_dx, chase_dy
                     last_attack_move_plan_t = time.time()
 
                 wasd_move_and_attack(
