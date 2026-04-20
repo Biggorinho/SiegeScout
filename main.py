@@ -639,7 +639,8 @@ def run():
                     print("Gegner gefunden -> ATTACK (Prio)")
                     state            = State.ATTACK
                     state_start      = time.time()
-                    hard_stuck_since = 0.0
+                    hard_stuck_since       = 0.0
+                    escape_committed_until = 0.0
                     next_attack_rightclick_t = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
                     next_attack_key3_t       = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
                     last_attack_sweep_t      = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
@@ -699,7 +700,7 @@ def run():
                     escape_committed_until = now_loop + random.uniform(
                         ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS)
                     replanning_due = True
-                else:
+                elif now_loop >= escape_committed_until:
                     hard_stuck_since       = 0.0
                     corner_escape_attempts = 0
 
