@@ -29,11 +29,11 @@ def test_octant_returns_tuple():
 def test_octant_avoids_current_direction():
     mask = _open_mask()
     center = (30, 30)
-    # Blocked going right (dx>0, dy≈0), should not return same direction
+    # Going east (current_dx=200, dy=0) should be excluded (within 45°)
     dx, dy = octant_escape_delta(mask, center, 200, 0)
     angle = math.atan2(dy, dx)
-    # Should not be heading east (within 45°)
-    assert abs(angle) > math.pi / 4 or abs(angle - math.pi) < math.pi / 4
+    # Result must be more than 45° away from east (angle=0)
+    assert abs((angle + math.pi) % (2 * math.pi) - math.pi) > math.pi / 4
 
 
 def test_octant_picks_walkable_direction_in_corridor():

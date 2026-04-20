@@ -187,16 +187,13 @@ def adaptive_walkable_mask(minimap_bgr, center, target=None):
     to 1 and 0 so narrow corridors are reachable when no full-buffer path exists.
     If target is given, only falls back when A* cannot route to target.
     """
+    base = build_walkable_minimap_mask(minimap_bgr)
+    base = connected_walkable_mask(base, center)
+    if base is None:
+        return None
     last_mask = None
-    for iterations in (WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0):
-        mask = build_walkable_minimap_mask(minimap_bgr)
-        mask = connected_walkable_mask(mask, center)
-        if mask is None:
-            continue
-        if iterations > 0:
-            eroded = cv2.erode(mask, np.ones((3, 3), dtype=np.uint8), iterations=iterations)
-        else:
-            eroded = mask
+    for iterations in dict.fromkeys((WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0)):
+        eroded = cv2.erode(base, np.ones((3, 3), dtype=np.uint8), iterations=iterations) if iterations > 0 else base
         last_mask = eroded
         if target is None:
             return eroded
