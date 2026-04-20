@@ -13,6 +13,7 @@ from config import (
     ATTACK_KITE_CHANCE, ATTACK_CHASE_MINIMAP_DIST, ATTACK_FLEE_MINIMAP_DIST,
     ATTACK_BACKPEDAL_STRENGTH, ATTACK_ORBIT_BACKPEDAL_STRENGTH,
     KITE_COMMIT_MIN_SECONDS, KITE_COMMIT_MAX_SECONDS,
+    WALL_BUFFER_ITERATIONS,
 )
 from minimap import (
     build_walkable_minimap_mask, connected_walkable_mask, buffered_walkable_mask,
@@ -177,6 +178,68 @@ def smooth_path(path, mask):
         smoothed.append(path[j])
         i = j
     return smoothed
+
+
+def adaptive_walkable_mask(minimap_bgr, center, target=None):
+    """Walkable mask with adaptive wall buffer.
+
+    Tries WALL_BUFFER_ITERATIONS first (keeps paths wall-distant), then falls back
+    to 1 and 0 so narrow corridors are reachable when no full-buffer path exists.
+    If target is given, only falls back when A* cannot route to target.
+    """
+    last_mask = None
+    for iterations in (WALL_BUFFER_ITERATIONS, max(0, WALL_BUFFER_ITERATIONS - 1), 0):
+        mask = build_walkable_minimap_mask(minimap_bgr)
+        mask = connected_walkable_mask(mask, center)
+        if mask is None:
+            continue
+        if iterations > 0:
+            eroded = cv2.erode(mask, np.ones((3, 3), dtype=np.uint8), iterations=iterations)
+        else:
+            eroded = mask
+        last_mask = eroded
+        if target is None:
+            return eroded
+        if _a_star_full_path(eroded, center, target) is not None:
+            return eroded
+    return last_mask
+
+
+def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, samples=14):
+    """Test 8 compass directions; return screen-space delta for the most walkable one.
+
+    Excludes directions within 45° of current_dx/dy (the direction that failed).
+    """
+    if mask is None:
+        return random_explore_delta()
+
+    current_angle = (
+        math.atan2(current_dy, current_dx)
+        if (abs(current_dx) + abs(current_dy)) > 1e-6
+        else None
+    )
+
+    h, w = mask.shape[:2]
+    best_angle, best_score = None, -1.0
+
+    for i in range(8):
+        angle = i * math.pi / 4
+        if current_angle is not None:
+            diff = abs((angle - current_angle + math.pi) % (2 * math.pi) - math.pi)
+            if diff <= math.pi / 4:
+                continue
+        tx = int(max(0, min(w - 1, center[0] + math.cos(angle) * probe_dist)))
+        ty = int(max(0, min(h - 1, center[1] + math.sin(angle) * probe_dist)))
+        score = ray_walkability_score(mask, center, (tx, ty), samples=samples)
+        if score > best_score:
+            best_score = score
+            best_angle = angle
+
+    if best_angle is None or best_score < 0.3:
+        return random_explore_delta()
+
+    dist = random.randint(95, 180)
+    return int(math.cos(best_angle) * dist), int(math.sin(best_angle) * dist)
 
 
 def path_delta_from_center(minimap_bgr, center, target_dot, terrain_memory=None):
