@@ -98,6 +98,12 @@ EXPLORE_HEATMAP_PENALTY    = 20.0
 ESCAPE_COMMIT_MIN_SECONDS  = 0.6
 ESCAPE_COMMIT_MAX_SECONDS  = 1.0
 
+# Explore stuck detection — window sized for short ticks (~0.2s each → ~5s before firing)
+EXPLORE_STUCK_WINDOW        = 25
+EXPLORE_STUCK_MIN_MOVE      = 8
+# Walk-score mid-cycle replan cooldown — don't redirect more than once per N seconds
+WALK_SCORE_REPLAN_COOLDOWN  = 2.0
+
 # New — sector tracker
 SECTOR_TRACKER_DECAY_EVERY = 60
 SECTOR_TRACKER_PENALTY     = 25.0

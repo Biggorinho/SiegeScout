@@ -26,6 +26,7 @@ from config import (
     ATTACK_STUCK_WINDOW, ATTACK_STUCK_MIN_MOVE,
     ATTACK_STUCK_ARM_SECONDS,
     EXPLORE_REPLAN_SECONDS, EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS,
+    EXPLORE_STUCK_WINDOW, EXPLORE_STUCK_MIN_MOVE, WALK_SCORE_REPLAN_COOLDOWN,
     POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS,
     STUCK_LOG_COOLDOWN, STUCK_COUNT_EVENT_COOLDOWN_SECONDS,
     STUCK_VOTE_RESET_CONSECUTIVE, HARD_STUCK_RESET_SECONDS,
@@ -93,7 +94,7 @@ def run():
 
     state              = State.EXPLORE
     paused             = False
-    stuck              = StuckDetector()
+    stuck              = StuckDetector(window=EXPLORE_STUCK_WINDOW, min_move=EXPLORE_STUCK_MIN_MOVE)
     state_start        = time.time()
     last_flee_dir      = (0, 0)
     last_enemy_seen_t  = 0.0
@@ -729,7 +730,8 @@ def run():
                         last_explore_target = target
                     last_explore_plan_t = time.time()
 
-                if cached_mask is not None and last_explore_target is not None:
+                if cached_mask is not None and last_explore_target is not None and \
+                        (time.time() - last_explore_plan_t) > WALK_SCORE_REPLAN_COOLDOWN:
                     walk_score = ray_walkability_score(
                         cached_mask, center, last_explore_target, samples=14)
                     if walk_score < 0.55:
