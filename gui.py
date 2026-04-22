@@ -1,7 +1,7 @@
 import sys
 import threading
 import tkinter as tk
-from tkinter import ttk, scrolledtext
+from tkinter import scrolledtext
 import io
 import queue
 
@@ -86,26 +86,19 @@ class BotUI(tk.Tk):
                                   bd=1, relief=tk.GROOVE)
         opt_frame.pack(fill=tk.X, padx=10, pady=8)
 
-        def _chk(parent, label, default):
+        def _chk(parent, label, default, enabled=True):
             var = tk.BooleanVar(value=default)
             tk.Checkbutton(parent, text=label, variable=var,
                            bg=BG, fg=FG, selectcolor=SEP,
                            activebackground=BG, activeforeground=FG,
-                           font=("Segoe UI", 10)).pack(anchor=tk.W, padx=8, pady=1)
+                           font=("Segoe UI", 10),
+                           state=(tk.NORMAL if enabled else tk.DISABLED),
+                           disabledforeground="#7f849c").pack(anchor=tk.W, padx=8, pady=1)
             return var
 
-        self._loot_var  = _chk(opt_frame, "Enable Loot",           config.ENABLE_LOOT)
-        self._death_var = _chk(opt_frame, "Enable Death Handling",  config.ENABLE_DEATH_HANDLING)
-
-        # minimap mode
-        mm_row = tk.Frame(opt_frame, bg=BG)
-        mm_row.pack(anchor=tk.W, padx=8, pady=(4, 2))
-        tk.Label(mm_row, text="Minimap Mode:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
-        self._mm_var = tk.StringVar(value=config.MINIMAP_MODE)
-        mm_cb = ttk.Combobox(mm_row, textvariable=self._mm_var,
-                             values=["small", "large"], state="readonly", width=7)
-        mm_cb.pack(side=tk.LEFT, padx=6)
+        self._death_var   = _chk(opt_frame, "Enable Death Handling",  config.ENABLE_DEATH_HANDLING)
+        self._mining_var  = _chk(opt_frame, "Enable Mining (Coming soon)", False, enabled=False)
+        self._loot_items_var = _chk(opt_frame, "Enable Loot Items (Coming soon)", False, enabled=False)
 
         # ── separator ──
         tk.Frame(self, bg=SEP, height=1).pack(fill=tk.X, padx=10)
@@ -151,9 +144,9 @@ class BotUI(tk.Tk):
 
         kwargs = dict(
             stop_event=self._stop_event,
-            enable_loot=self._loot_var.get(),
             enable_death_handling=self._death_var.get(),
-            minimap_mode_override=self._mm_var.get(),
+            enable_mining=self._mining_var.get(),
+            enable_loot_items=self._loot_items_var.get(),
         )
         self._bot_thread = threading.Thread(target=_main.run, kwargs=kwargs, daemon=True)
         self._bot_thread.start()
@@ -222,7 +215,11 @@ class BotUI(tk.Tk):
 
 def main():
     app = BotUI()
-    app.mainloop()
+    try:
+        app.mainloop()
+    except KeyboardInterrupt:
+        # Allow clean terminal stop (Ctrl+C) without traceback noise.
+        app._on_close()
 
 
 if __name__ == "__main__":

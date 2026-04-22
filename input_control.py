@@ -18,10 +18,10 @@ from config import (
 
 
 def sleep_interruptible(duration, step=0.02):
-    """Sleep in short slices; return False if user pressed q or p."""
+    """Sleep in short slices; return False if user pressed F1 or p."""
     end_t = time.time() + max(0.0, duration)
     while time.time() < end_t:
-        if keyboard.is_pressed('q') or keyboard.is_pressed('p'):
+        if keyboard.is_pressed('f1') or keyboard.is_pressed('p'):
             return False
         time.sleep(min(step, max(0.0, end_t - time.time())))
     return True
@@ -33,6 +33,16 @@ def left_mouse_down():
 
 def left_mouse_up():
     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+
+
+def attack_key_down():
+    """Press Q (the attack key)."""
+    keyboard.press('q')
+
+
+def attack_key_up():
+    """Release Q (the attack key)."""
+    keyboard.release('q')
 
 
 def right_mouse_click(hold_time=0.05):
@@ -105,9 +115,11 @@ def tap_space(hold_time=0.04):
 
 
 def release_all_inputs():
-    """Emergency input release for movement keys and held mouse button."""
+    """Emergency input release for movement keys and held attack inputs."""
     for k in ('w', 'a', 's', 'd'):
         keyboard.release(k)
+    # Attack is bound to Q, but release LMB too as a safety net.
+    attack_key_up()
     left_mouse_up()
 
 
@@ -152,38 +164,37 @@ def backtrack_move(dx, dy, last_backtrack_t):
 
 
 def cast_right_click_skill(attack_held, resume_left=False):
-    """Cast right-click skill safely: never overlap with held left-click.
-    The game blocks right-click for ~0.4 s after releasing left-click or jumping."""
+    """Cast right-click skill while managing held Q attack."""
     if attack_held:
-        left_mouse_up()
+        attack_key_up()
         attack_held = False
-        time.sleep(0.42)
+        time.sleep(0.15)
     right_mouse_click(hold_time=0.06)
     if resume_left:
         time.sleep(0.05)
-        left_mouse_down()
+        attack_key_down()
         attack_held = True
     return attack_held
 
 
 def cast_key_skill_safe(key_name, attack_held, resume_left=False, hold_time=0.06):
-    """Cast a keyboard skill safely: avoid overlap with held left-click."""
+    """Cast a keyboard skill safely: avoid overlap with held attack key."""
     if attack_held:
-        left_mouse_up()
+        attack_key_up()
         attack_held = False
         sleep_interruptible(0.02)
     tap_key(key_name, hold_time=hold_time)
     if resume_left:
-        left_mouse_down()
+        attack_key_down()
         attack_held = True
         sleep_interruptible(0.02)
     return attack_held
 
 
 def cast_key3_skill_safe(attack_held, resume_left=False):
-    """Cast key 3 reliably: release LMB, double tap, then resume LMB."""
+    """Cast key 3 reliably: release attack, double tap, then resume attack."""
     if attack_held:
-        left_mouse_up()
+        attack_key_up()
         attack_held = False
         sleep_interruptible(0.03)
     for i in range(KEY3_REPEAT_COUNT):
@@ -191,16 +202,16 @@ def cast_key3_skill_safe(attack_held, resume_left=False):
         if i < KEY3_REPEAT_COUNT - 1:
             time.sleep(KEY3_DOUBLE_TAP_GAP_SECONDS)
     if resume_left:
-        left_mouse_down()
+        attack_key_down()
         attack_held = True
         sleep_interruptible(0.03)
     return attack_held
 
 
 def spin_to_clear_melee(rounds=2, radius=200, steps=36):
-    """Hold left-click and sweep cursor in circles to kill nearby melee enemies."""
+    """Hold Q key and sweep cursor in circles to kill nearby melee enemies."""
     cx, cy = SCREEN_W // 2, SCREEN_H // 2
-    left_mouse_down()
+    keyboard.press('q')
     for _ in range(rounds):
         for i in range(steps):
             angle = 2 * math.pi * i / steps
@@ -209,7 +220,7 @@ def spin_to_clear_melee(rounds=2, radius=200, steps=36):
                 int(cy + math.sin(angle) * radius),
             )
             time.sleep(0.04)
-    left_mouse_up()
+    keyboard.release('q')
     ctypes.windll.user32.SetCursorPos(cx, cy)
     time.sleep(0.20)
 
@@ -238,7 +249,7 @@ def cast_opening_buff_sequence(move_dx=0, move_dy=0):
         time.sleep(0.18)
 
         spin_radius, spin_steps, spin_rounds = 180, 48, 2
-        left_mouse_down()
+        keyboard.press('q')
         for _ in range(spin_rounds):
             for i in range(spin_steps):
                 angle = 2 * math.pi * i / spin_steps
@@ -247,20 +258,11 @@ def cast_opening_buff_sequence(move_dx=0, move_dy=0):
                     int(cy + math.sin(angle) * spin_radius),
                 )
                 time.sleep(0.06)
-        left_mouse_up()
+        keyboard.release('q')
 
         ctypes.windll.user32.SetCursorPos(cx, cy)
         time.sleep(0.20)
-        time.sleep(0.40)
-
-        tap_key('x', hold_time=0.10)
-        time.sleep(0.55)
-        tap_key('q', hold_time=0.10)
-        time.sleep(1.50)
-        tap_key('x', hold_time=0.12)
-        time.sleep(0.08)
     finally:
-        left_mouse_up()
         for k in move_keys:
             keyboard.release(k)
 
@@ -384,8 +386,9 @@ def wasd_move_and_attack(move_dx, move_dy, duration=0.32, aim_dx=None, aim_dy=No
             keyboard.press(k)
         end_t = time.time() + duration
         while time.time() < end_t:
-            if keyboard.is_pressed('q') or keyboard.is_pressed('p'):
+            if keyboard.is_pressed('f1') or keyboard.is_pressed('p'):
                 break
+            keyboard.press('q')
             attack_toward(aim_dx, aim_dy)
             if not sleep_interruptible(0.02):
                 break
@@ -416,7 +419,7 @@ def perform_attack_sweep(
             x2, y2 = points[i + 1]
             seg_start = time.time()
             while (time.time() - seg_start) < seg_dur:
-                if keyboard.is_pressed('q') or keyboard.is_pressed('p'):
+                if keyboard.is_pressed('f1') or keyboard.is_pressed('p'):
                     return
                 t  = min(1.0, (time.time() - seg_start) / seg_dur)
                 vx = x1 * (1.0 - t) + x2 * t
@@ -424,6 +427,7 @@ def perform_attack_sweep(
                 tx = int(max(50, min(SCREEN_W - 50, cx + vx * radius)))
                 ty = int(max(50, min(SCREEN_H - 50, cy + vy * radius)))
                 ctypes.windll.user32.SetCursorPos(tx, ty)
+                keyboard.press('q')
                 if not sleep_interruptible(0.035):
                     return
     finally:

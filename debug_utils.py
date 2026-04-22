@@ -105,3 +105,83 @@ def save_minimap_frame(
 
     combined = np.hstack([img, panel2, panel3])
     cv2.imwrite(os.path.join(DEBUG_DIR, f"dbg_{frame_idx:04d}.png"), combined)
+
+
+def save_skull_detection_snapshot(minimap_bgr, enemy_dots, center, stamp=None, state_label=None, zone_age_s=None):
+    """Write a focused minimap snapshot whenever skull dots are detected.
+
+    Panels (left to right):
+      1. Minimap with skull markers and center
+      2. Skull HSV mask used by detector
+      3. Generic enemy color mask for cross-check
+    """
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return
+
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    if stamp is None:
+        stamp = int(time.time() * 1000)
+
+    label = str(state_label).lower() if state_label is not None else "unknown"
+    label = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in label) or "unknown"
+
+    skull_dots = [(x, y) for x, y, _, kind in enemy_dots if kind == "skull"]
+    if not skull_dots:
+        return
+
+    panel1 = minimap_bgr.copy()
+    if center is not None:
+        cv2.drawMarker(panel1, (int(center[0]), int(center[1])), (255, 100, 0), cv2.MARKER_CROSS, 14, 2)
+    for x, y in skull_dots:
+        cv2.circle(panel1, (int(x), int(y)), 8, (255, 255, 255), 2)
+        cv2.putText(panel1, "SKULL", (int(x) + 4, int(y) - 6),
+                    cv2.FONT_HERSHEY_PLAIN, 0.9, (255, 255, 255), 1)
+
+    hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+    skull_mask = cv2.inRange(hsv, np.array([0, 0, 145]), np.array([180, 75, 255]))
+    panel2 = cv2.cvtColor(skull_mask, cv2.COLOR_GRAY2BGR)
+
+    r1 = cv2.inRange(hsv, np.array([0, 120, 110]), np.array([10, 255, 255]))
+    r2 = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
+    p = cv2.inRange(hsv, np.array([128, 80, 90]), np.array([160, 255, 255]))
+    y = cv2.inRange(hsv, np.array([10, 90, 100]), np.array([38, 255, 255]))
+    enemy_mask = cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(r1, r2), p), y)
+    panel3 = cv2.cvtColor(enemy_mask, cv2.COLOR_GRAY2BGR)
+
+    info = f"skulls={len(skull_dots)} state={label}"
+    if zone_age_s is not None:
+        info += f" zone={int(zone_age_s)}s"
+    cv2.putText(panel1, info, (5, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 220, 255), 1)
+    cv2.putText(panel2, "skull_mask", (5, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 220, 255), 1)
+    cv2.putText(panel3, "enemy_mask", (5, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 220, 255), 1)
+
+    combined = np.hstack([panel1, panel2, panel3])
+    cv2.imwrite(os.path.join(DEBUG_DIR, f"skull_dbg_{label}_z{int(zone_age_s) if zone_age_s is not None else 0}_{stamp}.png"), combined)
+
+
+def save_skull_mask_probe(minimap_bgr, center=None, stamp=None, state_label=None, zone_age_s=None):
+    """Save skull mask probe even when no skull was confirmed, for miss diagnosis."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return
+
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+    if stamp is None:
+        stamp = int(time.time() * 1000)
+
+    label = str(state_label).lower() if state_label is not None else "unknown"
+    label = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in label) or "unknown"
+
+    panel1 = minimap_bgr.copy()
+    if center is not None:
+        cv2.drawMarker(panel1, (int(center[0]), int(center[1])), (255, 100, 0), cv2.MARKER_CROSS, 14, 2)
+
+    hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+    skull_mask = cv2.inRange(hsv, np.array([0, 0, 145]), np.array([180, 75, 255]))
+    panel2 = cv2.cvtColor(skull_mask, cv2.COLOR_GRAY2BGR)
+
+    cv2.putText(panel1, f"state={label} zone={int(zone_age_s) if zone_age_s is not None else 0}s", (5, 14),
+                cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 220, 255), 1)
+    cv2.putText(panel2, "skull_mask_probe", (5, 14), cv2.FONT_HERSHEY_PLAIN, 1.0, (0, 220, 255), 1)
+
+    combined = np.hstack([panel1, panel2])
+    cv2.imwrite(os.path.join(DEBUG_DIR, f"skull_probe_{label}_z{int(zone_age_s) if zone_age_s is not None else 0}_{stamp}.png"), combined)

@@ -11,14 +11,15 @@ import keyboard
 
 from config import (
     SCREEN_W, SCREEN_H, DEBUG_DIR,
-    MINIMAP_MODE,
     HP_FLEE_THRESHOLD, HP_RESUME_THRESHOLD,
     HP_ZERO_DEAD_THRESHOLD, HP_ZERO_RESPAWN_COOLDOWN_SECONDS,
     HP_BAR_MISSING_GRACE_SECONDS,
     HEALTH_POTION_KEY, HEALTH_POTION_COOLDOWN_SECONDS,
     HEALTH_POTION_BURST_MIN_HP, HEALTH_POTION_BURST_MAX_HP,
     HEALTH_POTION_BURST_COUNT, HEALTH_POTION_BURST_GAP_SECONDS,
-    ATTACK_LOST_GRACE, ATTACK_TIMEOUT, LOOT_TIMEOUT, FLEE_MAX_WAIT,
+    HP_RECOVERY_THRESHOLD,
+    HP_RECOVERY_POTION_PRESSES, HP_RECOVERY_COOLDOWN_SECONDS,
+    ATTACK_LOST_GRACE, ATTACK_TIMEOUT, FLEE_MAX_WAIT,
     ATTACK_MOVE_REPLAN_SECONDS, ATTACK_CHASE_MINIMAP_DIST,
     ATTACK_RIGHTCLICK_INTERVAL_SECONDS, ATTACK_KEY3_INTERVAL_SECONDS,
     ATTACK_SWEEP_INTERVAL_SECONDS, ATTACK_SWEEP_DURATION_SECONDS, ATTACK_SWEEP_RADIUS,
@@ -32,7 +33,8 @@ from config import (
     STUCK_VOTE_RESET_CONSECUTIVE, HARD_STUCK_RESET_SECONDS,
     HARD_STUCK_SNAPSHOT_COOLDOWN_SECONDS,
     CORNER_ESCAPE_COOLDOWN_SECONDS, CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET,
-    VOTE_RESET_COOLDOWN_SECONDS, VOTE_RESET_ENEMY_GRACE_SECONDS,
+    VOTE_RESET_COOLDOWN_SECONDS, VOTE_RESET_FAIL_COOLDOWN_SECONDS, VOTE_RESET_ENEMY_GRACE_SECONDS,
+    VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT, VOTE_RESET_FAIL_LOCKOUT_SECONDS,
     VOTE_RESET_MIN_HP, NO_ENEMY_RESET_MIN_FRAMES,
     ZONE_MAX_SECONDS_BEFORE_RESET, ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS,
     ZONE_TRANSITION_FREEZE_SECONDS,
@@ -43,13 +45,28 @@ from config import (
     LAST_SEEN_MONSTER_MEMORY_SECONDS,
     COMPANION_TRACK_RADIUS,
     RESET_DIAG_PRINT_INTERVAL_SECONDS,
+    SKULL_DEBUG_SNAPSHOT_COOLDOWN_SECONDS,
+    SKULL_DEBUG_PROBE_COOLDOWN_SECONDS,
     ATTACK_IDLE_VOTE_RESET_SECONDS,
     ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS,
-    ITEM_TEMPLATE_PATHS,
+    MINING_SCAN_INTERVAL_SECONDS,
+    MINING_CLICK_INTERVAL_SECONDS,
+    MINING_INTERACT_INTERVAL_SECONDS,
+    MINING_QTE_PRESS_COOLDOWN_SECONDS,
+    LOOT_ITEMS_SCAN_INTERVAL_SECONDS,
+    LOOT_ITEMS_CLICK_INTERVAL_SECONDS,
+    MINING_APPROACH_MIN_DIST_PX,
+    MINING_APPROACH_JUMP_DIST_PX,
+    MINING_APPROACH_MOVE_MIN_SECONDS,
+    MINING_APPROACH_MOVE_MAX_SECONDS,
+    MINING_SESSION_MEMORY_SECONDS,
+    RESOURCE_COLLECT_START_DELAY_SECONDS,
 )
 from detectors import (
-    classify_enemy_dots, get_hp_percent, find_items_on_screen,
+    classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible,
+    classify_ore_dots, find_ore_nodes_on_screen, detect_mining_qte_window,
+    classify_item_dots, find_item_tags_on_screen,
 )
 from minimap import (
     get_minimap_region, minimap_center_from_image,
@@ -65,10 +82,11 @@ from state import State, StuckDetector, ExploreHeatMap, TerrainMemory, Companion
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
-    left_mouse_down, left_mouse_up,
+    attack_key_down, attack_key_up,
     cast_right_click_skill, cast_key3_skill_safe,
     spin_to_clear_melee, cast_opening_buff_sequence,
     tap_key, release_all_inputs,
+    left_click_at,
     _aim_cursor_toward_vector, maybe_jump_with_movement,
     maybe_jump_stuck_sequence,
     wasd_move_and_attack, perform_attack_sweep,
@@ -77,26 +95,18 @@ from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map,
 )
-from debug_utils import save_hard_stuck_snapshot, save_minimap_frame
+from debug_utils import save_hard_stuck_snapshot, save_minimap_frame, save_skull_detection_snapshot, save_skull_mask_probe
 
 
-def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_mode_override=None):
+def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_loot_items=None):
     import config as _cfg
-    _enable_loot           = _cfg.ENABLE_LOOT           if enable_loot is None           else enable_loot
     _enable_death_handling = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
+    _enable_mining         = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
+    _enable_loot_items     = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
 
-    item_templates = []
-    for path in ITEM_TEMPLATE_PATHS:
-        if os.path.exists(path):
-            item_templates.append(cv2.imread(path, cv2.IMREAD_GRAYSCALE))
-            print(f"Template: {path}")
-        else:
-            item_templates.append(None)
-            print(f"Fehlt: {path}")
-
-    print("Bot gestartet | q=Stop | p=Pause | esc=Emergency stop | f6=Minimap Mode")
+    print("Bot gestartet | q=Stop | p=Pause | esc=Emergency stop")
     print("Spiel muss sichtbar sein (kein Hintergrundmodus mit mss)")
-    print(f"Minimap mode: {MINIMAP_MODE}")
+    print("Minimap mode: small")
 
     state              = State.EXPLORE
     paused             = False
@@ -135,16 +145,20 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
     attack_stuck                 = StuckDetector(window=ATTACK_STUCK_WINDOW, min_move=ATTACK_STUCK_MIN_MOVE)
     cached_mask                  = None
     companion                    = CompanionSuppressor()
-    minimap_mode                 = minimap_mode_override if minimap_mode_override else MINIMAP_MODE
+    minimap_mode                 = "small"
     debug_mode                   = False
     debug_frame_idx              = 0
     last_attack_activity_t       = time.time()
     zone_had_attack              = False
     last_vote_reset_t            = 0.0
+    vote_reset_fail_streak       = 0
+    vote_reset_lockout_until     = 0.0
     auto_esc_ignore_until        = 0.0
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
     last_health_potion_t         = 0.0
+    last_hp_recovery_t           = 0.0
+    last_attack_key_refresh_t    = 0.0
     last_known_hp                = None
     next_attack_rightclick_t     = time.time() + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
     next_attack_key3_t           = time.time() + ATTACK_KEY3_INTERVAL_SECONDS
@@ -166,6 +180,8 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
     _log_enemy_count             = -1
     _log_chase_t                 = 0.0
     last_reset_diag_t            = 0.0
+    last_skull_debug_snapshot_t  = 0.0
+    last_skull_probe_snapshot_t  = 0.0
     zone_started_t               = time.time()
     last_death_respawn_t         = 0.0
     death_screen_frames          = 0
@@ -174,7 +190,14 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
     next_opening_key3_t          = 0.0
     rightclick_busy_until        = 0.0
     last_explore_target          = None
-
+    last_mining_scan_t           = 0.0
+    last_mining_click_t          = 0.0
+    last_mining_interact_t       = 0.0
+    last_mining_qte_press_t      = 0.0
+    mining_active_until          = 0.0
+    mining_target_screen         = None
+    last_loot_items_scan_t       = 0.0
+    last_loot_items_click_t      = 0.0
     # ── shared reset helper ────────────────────────────────────────────────────
     # Defined as a closure so it can assign back into run()'s local scope.
     def _do_zone_reset():
@@ -189,6 +212,9 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
         nonlocal explore_stuck_active, attack_stuck_active
         nonlocal explore_stuck_jump_seq_idx, attack_stuck_jump_seq_idx
         nonlocal explore_stuck_jump_pref, attack_stuck_jump_pref
+        nonlocal mining_active_until, mining_target_screen
+        nonlocal last_loot_items_scan_t, last_loot_items_click_t
+        nonlocal vote_reset_fail_streak, vote_reset_lockout_until
         last_vote_reset_t             = time.time()
         zone_transition_until         = last_vote_reset_t + ZONE_TRANSITION_FREEZE_SECONDS
         last_attack_activity_t        = zone_transition_until
@@ -224,6 +250,12 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
         attack_stuck_jump_seq_idx[0] = 0
         explore_stuck_jump_pref[0] = False
         attack_stuck_jump_pref[0] = False
+        mining_active_until = 0.0
+        mining_target_screen = None
+        last_loot_items_scan_t = 0.0
+        last_loot_items_click_t = 0.0
+        vote_reset_fail_streak = 0
+        vote_reset_lockout_until = 0.0
 
     def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
         nonlocal state, state_start, hard_stuck_since, escape_committed_until
@@ -250,15 +282,48 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
         attack_stuck_jump_pref[0]      = False
         attack_stuck_jump_seq_idx[0]   = 0
         if attack_held:
-            left_mouse_up()
+            attack_key_up()
             attack_held = False
         if hold_attack:
-            left_mouse_down()
+            attack_key_down()
             attack_held = True
         enemy_chaser.reset()
 
     with mss.mss() as sct:
         full_mon = {"top": 0, "left": 0, "width": SCREEN_W, "height": SCREEN_H}
+
+        def _attempt_vote_reset():
+            """Run vote reset once and apply cooldown on both success and failure."""
+            nonlocal last_vote_reset_t, auto_esc_ignore_until
+            nonlocal vote_reset_fail_streak, vote_reset_lockout_until
+            attempt_t = time.time()
+            # Set immediately to prevent same-tick retriggers while reset is running.
+            last_vote_reset_t = attempt_t
+            auto_esc_ignore_until = attempt_t + 1.0
+            ok = run_vote_reset_sequence(sct, full_mon)
+            if ok:
+                vote_reset_fail_streak = 0
+                vote_reset_lockout_until = 0.0
+                _do_zone_reset()
+            else:
+                vote_reset_fail_streak += 1
+                fail_cd = max(0.0, min(VOTE_RESET_FAIL_COOLDOWN_SECONDS, VOTE_RESET_COOLDOWN_SECONDS))
+                if vote_reset_fail_streak >= VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT:
+                    vote_reset_lockout_until = max(vote_reset_lockout_until, attempt_t + VOTE_RESET_FAIL_LOCKOUT_SECONDS)
+                    # Keep base cooldown math stable and enforce long backoff via lockout gate.
+                    last_vote_reset_t = attempt_t - (VOTE_RESET_COOLDOWN_SECONDS - fail_cd)
+                    print(
+                        f"[RST] vote reset failed x{vote_reset_fail_streak} -> lockout "
+                        f"{VOTE_RESET_FAIL_LOCKOUT_SECONDS:.0f}s (pause menu/click not reliable)"
+                    )
+                else:
+                    # Keep short retry backoff without allowing rapid menu toggle loops.
+                    last_vote_reset_t = attempt_t - (VOTE_RESET_COOLDOWN_SECONDS - fail_cd)
+                    print(
+                        f"[RST] vote reset failed x{vote_reset_fail_streak} -> cooldown {fail_cd:.0f}s "
+                        "to avoid menu-toggle loop"
+                    )
+            return ok
 
         # ── startup: pick satanic zone from the world map ─────────────────────
         startup_frame = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
@@ -268,9 +333,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                 _do_zone_reset()
         else:
             print("[STARTUP] Oeffne Karte und waehle satanische Zone ...")
-            auto_esc_ignore_until = time.time() + 1.0
-            if run_vote_reset_sequence(sct, full_mon):
-                _do_zone_reset()
+            _attempt_vote_reset()
 
         while True:
             now_loop = time.time()
@@ -286,24 +349,19 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                 attack_held = False
                 print("EMERGENCY STOP (esc)")
                 break
-            if keyboard.is_pressed('q') and now_loop > auto_q_ignore_until:
+            if keyboard.is_pressed('f1') and now_loop > auto_q_ignore_until:
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 print("Bot gestoppt.")
                 break
             if keyboard.is_pressed('p'):
                 paused = not paused
                 if paused and attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 print("PAUSE" if paused else "RESUME")
                 time.sleep(0.5)
-                continue
-            if keyboard.is_pressed('f6'):
-                minimap_mode = "large" if minimap_mode == "small" else "small"
-                print(f"Minimap mode -> {minimap_mode}")
-                time.sleep(0.35)
                 continue
             if keyboard.is_pressed('f7'):
                 debug_mode = not debug_mode
@@ -445,7 +503,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
 
             if hp_zero_sustained:
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 release_all_inputs()
                 if (now_loop - last_death_respawn_t) >= HP_ZERO_RESPAWN_COOLDOWN_SECONDS:
@@ -465,10 +523,22 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
 
             hp_for_potion = hp if hp is not None else last_known_hp
             if hp_for_potion is not None:
+                hp_is_zero_like = hp_for_potion <= HP_ZERO_DEAD_THRESHOLD
+                if not hp_is_zero_like and hp_for_potion < HP_RECOVERY_THRESHOLD \
+                        and (now_loop - last_hp_recovery_t) >= HP_RECOVERY_COOLDOWN_SECONDS:
+                    print(f"[HP] {hp_for_potion:.0%} < {HP_RECOVERY_THRESHOLD:.0%} -> potion spam + spin")
+                    for _ in range(HP_RECOVERY_POTION_PRESSES):
+                        tap_key(HEALTH_POTION_KEY, hold_time=0.06)
+                        sleep_interruptible(0.05)
+                    last_health_potion_t = now_loop
+                    last_hp_recovery_t   = now_loop
+                    spin_to_clear_melee()
+                    if attack_held:
+                        attack_key_down()
+                    continue
                 potion_window = (
                     HEALTH_POTION_BURST_MIN_HP <= hp_for_potion <= HEALTH_POTION_BURST_MAX_HP
                 )
-                hp_is_zero_like = hp_for_potion <= HP_ZERO_DEAD_THRESHOLD
                 if potion_window and not hp_is_zero_like and \
                         (now_loop - last_health_potion_t) >= HEALTH_POTION_COOLDOWN_SECONDS:
                     for _ in range(HEALTH_POTION_BURST_COUNT):
@@ -485,14 +555,32 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
             dots       = [(x, y) for x, y, _, _ in enemy_dots]
             center = minimap_center_from_image(minimap)
 
+            skull_count = sum(1 for _, _, _, kind in enemy_dots if kind == "skull")
+            if skull_count > 0 and (now_loop - last_skull_debug_snapshot_t) >= SKULL_DEBUG_SNAPSHOT_COOLDOWN_SECONDS:
+                save_skull_detection_snapshot(
+                    minimap,
+                    enemy_dots,
+                    center,
+                    state_label=state.value,
+                    zone_age_s=max(0, now_loop - zone_started_t),
+                )
+                last_skull_debug_snapshot_t = now_loop
+                print(f"[DBG-SKULL] snapshot saved ({skull_count} skull dots)")
+            elif debug_mode and skull_count == 0 and (now_loop - last_skull_probe_snapshot_t) >= SKULL_DEBUG_PROBE_COOLDOWN_SECONDS:
+                save_skull_mask_probe(
+                    minimap,
+                    center=center,
+                    state_label=state.value,
+                    zone_age_s=max(0, now_loop - zone_started_t),
+                )
+                last_skull_probe_snapshot_t = now_loop
+
             terrain_memory.update(minimap)
 
             dot_filter_mask = build_walkable_minimap_mask(minimap, terrain_memory=terrain_memory)
             if dot_filter_mask is not None:
                 h_mm, w_mm = dot_filter_mask.shape[:2]
-                dots = [d for d in dots
-                        if 0 <= d[0] < w_mm and 0 <= d[1] < h_mm
-                        and dot_filter_mask[d[1], d[0]] > 0]
+                dots = [d for d in dots if 0 <= d[0] < w_mm and 0 <= d[1] < h_mm]
 
             companion.update(dots, center)
             filtered_dots = companion.filter(dots)
@@ -610,6 +698,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
 
             if debug_mode and (now_loop - last_reset_diag_t) >= RESET_DIAG_PRINT_INTERVAL_SECONDS:
                 cooldown_ready = (now_loop - last_vote_reset_t) >= VOTE_RESET_COOLDOWN_SECONDS
+                lockout_active = now_loop < vote_reset_lockout_until
                 print(
                     "[RST-DIAG] "
                     f"state={state.value} nearest={nearest is not None} conf={confirmed_enemy_now} "
@@ -619,45 +708,44 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                     f"enemy_age={now_loop - last_enemy_seen_t:.2f}s/{VOTE_RESET_ENEMY_GRACE_SECONDS:.2f}s "
                     f"hard_stuck={hard_stuck_age:.1f}s/{HARD_STUCK_RESET_SECONDS:.1f}s "
                     f"cooldown={'ok' if cooldown_ready else 'wait'} "
+                    f"lockout={'on' if lockout_active else 'off'} "
+                    f"fail_streak={vote_reset_fail_streak} "
                     f"stuck_chain={stuck_no_enemy_count}/{STUCK_VOTE_RESET_CONSECUTIVE}"
                 )
                 last_reset_diag_t = now_loop
 
             # ── vote-reset triggers ───────────────────────────────────────────
-            cooldown_ok = (now_loop - last_vote_reset_t) >= VOTE_RESET_COOLDOWN_SECONDS
+            cooldown_ok = (
+                now_loop >= vote_reset_lockout_until
+                and (now_loop - last_vote_reset_t) >= VOTE_RESET_COOLDOWN_SECONDS
+            )
 
             if hard_stuck_trigger and confirmed_enemy_now and cooldown_ok:
                 print(f"[STUCK-ENEMY] Stuck {hard_stuck_age:.1f}s with visible enemy -> spin + Vote Reset")
                 release_all_inputs()
                 attack_held = False
                 spin_to_clear_melee()
-                auto_esc_ignore_until = time.time() + 1.0
-                if run_vote_reset_sequence(sct, full_mon):
-                    _do_zone_reset()
+                _attempt_vote_reset()
                 continue
 
             if zone_had_attack and reset_safe_window and cooldown_ok and \
                     (now_loop - last_attack_activity_t) >= ATTACK_IDLE_VOTE_RESET_SECONDS:
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 print("Keine Attacke seit 5s -> spin + Vote Reset")
                 spin_to_clear_melee()
-                auto_esc_ignore_until = time.time() + 1.0
-                if run_vote_reset_sequence(sct, full_mon):
-                    _do_zone_reset()
+                _attempt_vote_reset()
                 continue
 
             if reset_safe_window and cooldown_ok and \
                     (now_loop - zone_started_t) >= ZONE_MAX_SECONDS_BEFORE_RESET:
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 print(f"Zone > {ZONE_MAX_SECONDS_BEFORE_RESET:.0f}s ohne verwertbaren Kampf -> spin + Vote Reset")
                 spin_to_clear_melee()
-                auto_esc_ignore_until = time.time() + 1.0
-                if run_vote_reset_sequence(sct, full_mon):
-                    _do_zone_reset()
+                _attempt_vote_reset()
                 continue
 
             emergency_stuck = (
@@ -672,9 +760,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                 attack_held          = False
                 last_death_respawn_t = now_loop
                 if attempt_respawn(sct, full_mon) and sleep_interruptible(RESPAWN_TO_RESET_DELAY_SECONDS):
-                    auto_esc_ignore_until = time.time() + 1.0
-                    if run_vote_reset_sequence(sct, full_mon):
-                        _do_zone_reset()
+                    _attempt_vote_reset()
                 continue
 
             if stuck_reset_safe_window and cooldown_ok and \
@@ -685,7 +771,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                     print(f"Hard-Stuck {hard_stuck_age:.1f}s -> Corner Escape Burst "
                           f"{corner_escape_attempts + 1}/{CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET}")
                     if attack_held:
-                        left_mouse_up()
+                        attack_key_up()
                         attack_held = False
                     pref_dx = last_seen_enemy_vec[0] if last_seen_enemy_vec else None
                     pref_dy = last_seen_enemy_vec[1] if last_seen_enemy_vec else None
@@ -700,15 +786,13 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                     continue
 
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
                 if hard_stuck_trigger:
                     print(f"Hard-Stuck {hard_stuck_age:.1f}s ohne Gegner -> Vote Reset")
                 else:
                     print(f"{stuck_no_enemy_count}x stuck ohne Gegner -> Vote Reset")
-                auto_esc_ignore_until = time.time() + 1.0
-                if run_vote_reset_sequence(sct, full_mon):
-                    _do_zone_reset()
+                _attempt_vote_reset()
                 continue
 
             # ── debug frame save ──────────────────────────────────────────────
@@ -726,7 +810,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
 
             # ── right-click shield refresh ────────────────────────────────────
             if now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
-                attack_held              = cast_right_click_skill(attack_held, resume_left=False)
+                attack_held              = cast_right_click_skill(attack_held, resume_left=True)
                 rightclick_busy_until    = time.time() + 0.35
                 next_attack_rightclick_t = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
 
@@ -752,12 +836,105 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
             # ── STATE: EXPLORE ────────────────────────────────────────────────
             if state == State.EXPLORE:
                 if attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
 
                 if time.time() < explore_pause_until:
                     sleep_interruptible(0.05)
                     continue
+
+                # Prioritize exploration/combat acquisition right after zone start.
+                resource_collect_allowed = (
+                    zone_had_attack
+                    or (now_loop - zone_started_t) >= RESOURCE_COLLECT_START_DELAY_SECONDS
+                )
+
+                if _enable_mining and resource_collect_allowed and not confirmed_enemy_now:
+                    qte = detect_mining_qte_window(frame)
+                    if qte.get("active", False):
+                        mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
+                        if qte.get("in_window", False) and \
+                                (now_loop - last_mining_qte_press_t) >= MINING_QTE_PRESS_COOLDOWN_SECONDS:
+                            tap_key('f', hold_time=0.04)
+                            last_mining_qte_press_t = now_loop
+                        sleep_interruptible(0.03)
+                        continue
+
+                    mining_should_scan = (
+                        (now_loop - last_mining_scan_t) >= MINING_SCAN_INTERVAL_SECONDS
+                        or mining_target_screen is None
+                    )
+                    ores_on_screen = []
+                    ore_mm_target = None
+                    if mining_should_scan:
+                        ores_on_screen = find_ore_nodes_on_screen(frame)
+                        ore_mm = classify_ore_dots(minimap)
+                        if ore_mm:
+                            ore_mm_target = max(
+                                ore_mm,
+                                key=lambda entry: (entry[2], -dot_distance((entry[0], entry[1]), center)),
+                            )
+                        last_mining_scan_t = now_loop
+
+                    if ores_on_screen:
+                        px, py = SCREEN_W // 2, SCREEN_H // 2
+                        mining_target_screen = min(
+                            ores_on_screen,
+                            key=lambda n: (n[0] - px) * (n[0] - px) + (n[1] - py) * (n[1] - py),
+                        )
+                        mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
+
+                    if mining_target_screen is not None and now_loop <= mining_active_until:
+                        tx, ty = int(mining_target_screen[0]), int(mining_target_screen[1])
+                        mdx = tx - (SCREEN_W // 2)
+                        mdy = ty - (SCREEN_H // 2)
+                        mdist = math.hypot(mdx, mdy)
+
+                        if (now_loop - last_mining_click_t) >= MINING_CLICK_INTERVAL_SECONDS:
+                            left_click_at(tx, ty, hold_time=0.05)
+                            last_mining_click_t = now_loop
+
+                        if mdist > MINING_APPROACH_MIN_DIST_PX:
+                            wasd_move(mdx, mdy, random.uniform(
+                                MINING_APPROACH_MOVE_MIN_SECONDS,
+                                MINING_APPROACH_MOVE_MAX_SECONDS,
+                            ))
+                            if mdist >= MINING_APPROACH_JUMP_DIST_PX:
+                                maybe_jump_with_movement(mdx, mdy, last_jump_t, force_aim=True)
+
+                        if (now_loop - last_mining_interact_t) >= MINING_INTERACT_INTERVAL_SECONDS:
+                            tap_key('f', hold_time=0.04)
+                            last_mining_interact_t = now_loop
+
+                        if ore_mm_target is not None and debug_mode:
+                            print(f"[MINE] screen target=({tx},{ty}) minimap_hint=({ore_mm_target[0]},{ore_mm_target[1]})")
+
+                        sleep_interruptible(0.04)
+                        continue
+
+                    mining_target_screen = None
+
+                # ── LOOT ITEMS (new): star-marker hint + on-screen tag click ───────────
+                if _enable_loot_items and resource_collect_allowed and not confirmed_enemy_now:
+                    if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
+                        item_mm = classify_item_dots(minimap)
+                        items_on_screen = find_item_tags_on_screen(frame)
+                        last_loot_items_scan_t = now_loop
+
+                        if items_on_screen:
+                            px, py = SCREEN_W // 2, SCREEN_H // 2
+                            tx, ty, _ = min(
+                                items_on_screen,
+                                key=lambda n: (n[0] - px) * (n[0] - px) + (n[1] - py) * (n[1] - py),
+                            )
+                            if (now_loop - last_loot_items_click_t) >= LOOT_ITEMS_CLICK_INTERVAL_SECONDS:
+                                left_click_at(int(tx), int(ty), hold_time=0.05)
+                                last_loot_items_click_t = now_loop
+                            if debug_mode and item_mm:
+                                hint = item_mm[0]
+                                print(f"[LOOT] click=({int(tx)},{int(ty)}) minimap_star_hint=({hint[0]},{hint[1]})")
+                            sleep_interruptible(0.03)
+                            continue
 
                 pt = ctypes.wintypes.POINT()
                 ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
@@ -884,8 +1061,11 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
             # ── STATE: ATTACK ─────────────────────────────────────────────────
             elif state == State.ATTACK:
                 if not attack_held and now_loop >= rightclick_busy_until:
-                    left_mouse_down()
+                    attack_key_down()
                     attack_held = True
+                elif attack_held and (now_loop - last_attack_key_refresh_t) >= 0.3:
+                    attack_key_down()
+                    last_attack_key_refresh_t = now_loop
 
                 if nearest and (now_loop - last_attack_sweep_t) >= ATTACK_SWEEP_INTERVAL_SECONDS:
                     perform_attack_sweep(
@@ -965,16 +1145,12 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
 
                 if enemy_gone:
                     if attack_held:
-                        left_mouse_up()
+                        attack_key_up()
                         attack_held = False
-                    if _enable_loot:
-                        print("Gegner tot -> LOOT")
-                        state = State.LOOT
-                    else:
-                        print("Gegner tot -> EXPLORE")
-                        state = State.EXPLORE
-                        explore_pause_until = time.time() + random.uniform(
-                            POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS)
+                    print("Gegner tot -> EXPLORE")
+                    state = State.EXPLORE
+                    explore_pause_until = time.time() + random.uniform(
+                        POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS)
                     state_start = time.time()
                     continue
 
@@ -982,7 +1158,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                     state_start = time.time()
                 elif timed_out and not confirmed_enemy_now:
                     if attack_held:
-                        left_mouse_up()
+                        attack_key_up()
                         attack_held = False
                     print("ATTACK Timeout ohne Sichtkontakt -> EXPLORE")
                     state       = State.EXPLORE
@@ -992,7 +1168,7 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                 if not confirmed_enemy_now and \
                         (now_loop - last_enemy_seen_t) >= ATTACK_NO_CONFIRMED_ENEMY_TIMEOUT_SECONDS:
                     if attack_held:
-                        left_mouse_up()
+                        attack_key_up()
                         attack_held = False
                     print("ATTACK ohne bestaetigten Gegner -> EXPLORE")
                     state       = State.EXPLORE
@@ -1027,39 +1203,16 @@ def run(stop_event=None, enable_loot=None, enable_death_handling=None, minimap_m
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(attack_move_dx, attack_move_dy, last_jump_t)
 
-            # ── STATE: LOOT ───────────────────────────────────────────────────
-            elif state == State.LOOT:
-                if attack_held:
-                    left_mouse_up()
-                    attack_held = False
-
-                if (time.time() - state_start) > LOOT_TIMEOUT:
-                    state       = State.EXPLORE
-                    state_start = time.time()
-                    continue
-
-                item = find_items_on_screen(frame, item_templates)
-                if item:
-                    print(f"Item {item} -> pickup")
-                    ctypes.windll.user32.SetCursorPos(item[0], item[1])
-                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-                    sleep_interruptible(0.05)
-                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-                    sleep_interruptible(2.0)
-                else:
-                    state       = State.EXPLORE
-                    state_start = time.time()
-
             # ── STATE: FLEE ───────────────────────────────────────────────────
             elif state == State.FLEE:
                 if nearest:
                     adx, ady = dot_to_screen_delta(nearest, center)
                     _aim_cursor_toward_vector(adx, ady)
                     if not attack_held:
-                        left_mouse_down()
+                        attack_key_down()
                         attack_held = True
                 elif attack_held:
-                    left_mouse_up()
+                    attack_key_up()
                     attack_held = False
 
                 flee_delta = None
