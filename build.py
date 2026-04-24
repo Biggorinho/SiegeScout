@@ -33,6 +33,7 @@ def build():
         f"--include-data-files={LOGO_PNG}=logo.png",
         f"--output-dir={DIST_DIR}",
         "--output-filename=SiegeScout.exe",
+        "--enable-plugin=tk-inter",
         "--assume-yes-for-downloads",
         "--follow-imports",
         str(ROOT / "gui.py"),
