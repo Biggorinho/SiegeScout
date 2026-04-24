@@ -16,8 +16,8 @@ from config import (
     VOTE_RESET_MENU_SETTLE_SECONDS, VOTE_RESET_CLICK_RETRY_DELAY,
     VOTE_RESET_CLICK_Y_SWEEP_FRAC,
     VOTE_RESET_FIXED_CLICK_X_PX, VOTE_RESET_FIXED_CLICK_Y_PX,
-    VOTE_RESET_CLICK_ATTEMPTS, VOTE_RESET_TO_INTERACT_DELAY,
-    VOTE_RESET_SECOND_PASS_DELAY_SECONDS, VOTE_RESET_SECOND_PASS_ATTEMPTS,
+    VOTE_RESET_CLICK_ATTEMPTS,
+    VOTE_RESET_SHORTCUT_KEY, VOTE_RESET_SHORTCUT_WAIT_SECONDS,
     SATANIC_NODE_SCAN_ATTEMPTS, SATANIC_NODE_SCAN_RETRY_SECONDS,
     DEATH_RESPAWN_X_FRAC, DEATH_RESPAWN_Y_FRAC,
     DEATH_RESPAWN_CLICK_ATTEMPTS, DEATH_RESPAWN_RING_RADIUS_PX,
@@ -28,7 +28,8 @@ from detectors import grab_frame_bgr, is_world_map_visible, is_death_screen, is_
 from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
-    tap_key, sleep_interruptible, left_click_at, release_all_inputs, wasd_move,
+    tap_key, tap_key_shifted, sleep_interruptible, left_click_at,
+    release_all_inputs, wasd_move,
 )
 
 
@@ -44,7 +45,6 @@ def wait_for_world_map(sct, full_mon, retry_interact_key=None):
         if is_world_map_visible(frame):
             return True, frame
 
-        # If pause menu is open, close it first or interact key cannot open map.
         if is_pause_menu_visible(frame):
             tap_key('esc', hold_time=0.08)
             if not sleep_interruptible(0.22):
@@ -165,7 +165,6 @@ def _detect_blue_node_centers(frame_bgr):
 
 
 def _estimate_map_offset_from_nodes(frame_bgr):
-    """Estimate map drag offset by matching detected blue nodes to fixed anchors."""
     detected = _detect_blue_node_centers(frame_bgr)
     if not detected:
         return 0, 0, 0
@@ -256,7 +255,6 @@ def _score_satanic_fixed_node(hsv, x, y, core_radius=6, ring_radius=14):
     ring_sat = float(np.mean(ring[:, 1]))
     core_val = float(np.mean(core[:, 2]))
 
-    # Red highlight is the strongest satanic signal; purple is valid but weaker.
     hot_core_ratio = max(core_red_ratio, core_purple_ratio * 0.62)
     hot_ring_ratio = max(ring_red_ratio, ring_purple_ratio * 0.62)
     hot_dom_core = max(0.0, hot_core_ratio - core_blue_ratio)
@@ -329,30 +327,17 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
         print(f"[SAT] fixed-node rejected: not enough true red in core ({best_core_red:.2f} < 0.15)")
         return None
     margin = best_score - second_score if second_score > -1.0 else 999.0
-    # With purple-capable pools, many nodes can score high. Use adaptive margin:
-    # if top node is clearly red-highlighted, allow a smaller margin.
     required_margin = 10.0 if (best_core_red >= 0.45 or best_ring_red >= 0.28) else 28.0
     if second_score > -1.0 and margin < required_margin:
-        print(
-            f"[SAT] fixed-node best margin too low ({margin:.1f} < {required_margin:.1f})"
-        )
+        print(f"[SAT] fixed-node best margin too low ({margin:.1f} < {required_margin:.1f})")
         return None
 
     x, y, name = best
-    print(
-        f"[SAT] fixed-node picked {name} at ({x},{y}) score={best_score:.1f} "
-        f"core_hot={best_core_hot:.2f} margin={best_score-second_score:.1f}"
-    )
+    print(f"[SAT] fixed-node picked {name} at ({x},{y}) score={best_score:.1f} core_hot={best_core_hot:.2f} margin={best_score-second_score:.1f}")
     return x, y
 
 
 def _find_satanic_node(frame_bgr):
-    """Find the highlighted satanic zone node on the world map.
-
-    The map uses normal blue node markers that turn red when the satanic zone is
-    active. Score compact node-shaped contours by how red their center patch is,
-    rather than looking for a large red glow blob.
-    """
     if frame_bgr is None or frame_bgr.size == 0:
         return None
 
@@ -370,7 +355,7 @@ def _find_satanic_node(frame_bgr):
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     hotspot = _find_red_hotspot(hsv)
     node_mask = cv2.inRange(hsv, np.array([0, 60, 40]), np.array([180, 255, 255]))
-    node_mask = cv2.morphologyEx(node_mask, cv2.MORPH_OPEN,  np.ones((2, 2), dtype=np.uint8), iterations=1)
+    node_mask = cv2.morphologyEx(node_mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
     node_mask = cv2.morphologyEx(node_mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(node_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -425,8 +410,7 @@ def _find_satanic_node(frame_bgr):
         cy0 = max(0, cy_roi - outer_radius)
         cy1 = min(hsv.shape[0], cy_roi + outer_radius + 1)
         roi_patch_hsv = hsv[cy0:cy1, cx0:cx1]
-        roi_patch_bgr = roi[cy0:cy1, cx0:cx1]
-        if roi_patch_bgr.size == 0:
+        if roi_patch_hsv.size == 0:
             continue
 
         yy, xx = np.ogrid[:roi_patch_hsv.shape[0], :roi_patch_hsv.shape[1]]
@@ -491,12 +475,6 @@ def _find_satanic_node(frame_bgr):
 
         cand_x = cx_roi + x0
         cand_y = cy_roi + y0
-        print(
-            f"[SAT]   candidate ({cand_x},{cand_y}) area={area:.0f} circ={circularity:.2f} "
-            f"size={node_size} ring_red={ring_red_ratio:.2f} core_red={core_red_ratio:.2f} "
-            f"ring_blue={ring_blue_ratio:.2f} score={score:.1f}"
-        )
-
         if score > best_score:
             best_score = score
             best = (cand_x, cand_y)
@@ -530,6 +508,7 @@ def _find_pause_menu_button_rows(frame_bgr):
         return []
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
     def _rows_from_mask(mask, min_area=220):
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         rows = []
@@ -555,8 +534,6 @@ def _find_pause_menu_button_rows(frame_bgr):
 
     rows = _rows_from_mask(red)
     if len(rows) < 3:
-        # The pause buttons can shift hue between menu skins; broaden the mask
-        # only when the red pass does not find enough stacked rows.
         broad = cv2.inRange(hsv, np.array([0, 32, 32]), np.array([180, 255, 255]))
         broad = cv2.morphologyEx(broad, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8), iterations=1)
         broad = cv2.morphologyEx(broad, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
@@ -591,9 +568,6 @@ def _select_vote_reset_row(rows, target_y):
             continue
         gap_var = sum((gap - avg_gap) ** 2 for gap in gaps) / 3.0
         candidate = min(window, key=lambda row: abs(row[0] - target_y))
-        # Favor four-row stacks with even spacing, then choose the row in that
-        # stack closest to the Vote Reset Y band. This keeps us on Vote Reset if
-        # Resume is missing, while still rejecting noisy extra rows.
         score = gap_var * 2.5 + abs(candidate[0] - target_y) * 1.5
         if best_score is None or score < best_score:
             best_score = score
@@ -626,13 +600,7 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
 
 
 def _force_vote_reset_click_sequence(sct, full_mon, attempts):
-    """Last-resort vote reset click path when pause confirmation is unreliable.
-
-    This intentionally mirrors the old behavior: attempt click + interact even if
-    pause detector does not confirm the menu skin.
-    """
     print("[RST] force vote-reset click fallback")
-    # Try to normalize to pause menu before blind clicking the fixed row.
     frame = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(frame):
         tap_key('esc', hold_time=0.10)
@@ -645,21 +613,15 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
         if not sleep_interruptible(0.65):
             return False
 
-    # Fallback clicks are intentionally broad: some menu skins shift the row.
     base_x = VOTE_RESET_FIXED_CLICK_X_PX
     base_y = VOTE_RESET_FIXED_CLICK_Y_PX
     dx = int(SCREEN_W * 0.03)
     dy = int(SCREEN_H * 0.022)
     click_points = [
-        (base_x, base_y),
-        (base_x, base_y + dy),
-        (base_x, base_y - dy),
-        (base_x - dx, base_y),
-        (base_x + dx, base_y),
-        (base_x - dx, base_y + dy),
-        (base_x + dx, base_y + dy),
-        (base_x - dx, base_y - dy),
-        (base_x + dx, base_y - dy),
+        (base_x, base_y), (base_x, base_y + dy), (base_x, base_y - dy),
+        (base_x - dx, base_y), (base_x + dx, base_y),
+        (base_x - dx, base_y + dy), (base_x + dx, base_y + dy),
+        (base_x - dx, base_y - dy), (base_x + dx, base_y - dy),
     ]
 
     total_clicks = max(1, attempts) * 2
@@ -678,7 +640,6 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
         if map_visible:
             return pick_zone_from_open_map(sct, full_mon, frame)
 
-        # If menu got closed by a miss, reopen pause menu for the next click.
         retry_frame = grab_frame_bgr(sct, full_mon)
         if not is_pause_menu_visible(retry_frame) and not is_world_map_visible(retry_frame):
             tap_key('esc', hold_time=0.12)
@@ -689,53 +650,39 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
 
 
 def _ensure_pause_menu_open(sct, full_mon):
-    """Ensure pause menu is visible. Maximum two ESC presses to avoid toggling."""
+    """Verbesserte Version: immer ESC drücken für sauberes Menü."""
     frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(frame):
-        return True
-    if len(_find_pause_menu_button_rows(frame)) >= 2:
-        print("[RST] pause inferred via button rows")
+
+    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
+        print("[RST] pause menu already open")
         return True
 
-    # Close world map first if open.
     if is_world_map_visible(frame):
         tap_key('esc', hold_time=0.10)
-        if not sleep_interruptible(0.50):
-            return False
-        frame = grab_frame_bgr(sct, full_mon)
-        if is_pause_menu_visible(frame):
-            return True
-        if len(_find_pause_menu_button_rows(frame)) >= 2:
-            return True
+        sleep_interruptible(0.45)
 
-    # First ESC — open the menu.
+    print("[RST] pressing ESC to open pause menu")
     tap_key('esc', hold_time=0.12)
-    if not sleep_interruptible(0.85):
-        return False
+    sleep_interruptible(0.65)
+
     frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(frame):
-        return True
-    if len(_find_pause_menu_button_rows(frame)) >= 2:
-        print("[RST] pause inferred via button rows (first esc)")
+    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
+        print("[RST] pause menu confirmed")
         return True
 
-    # Second ESC only — first may have closed an already-open menu; this reopens.
     tap_key('esc', hold_time=0.12)
-    if not sleep_interruptible(0.85):
-        return False
+    sleep_interruptible(0.85)
+
     frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(frame):
-        return True
-    if len(_find_pause_menu_button_rows(frame)) >= 2:
-        print("[RST] pause inferred via button rows (second esc)")
+    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
+        print("[RST] pause menu confirmed (second ESC)")
         return True
 
-    print("[RST] pause menu not confirmed -> abort vote click this cycle")
+    print("[RST] could not open pause menu reliably")
     return False
 
 
 def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
-    """Try selecting a node with multiple click offsets; return True if map closes."""
     for dx, dy in offsets:
         tx = int(max(0, min(SCREEN_W - 1, x + dx)))
         ty = int(max(0, min(SCREEN_H - 1, y + dy)))
@@ -747,17 +694,13 @@ def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
 
 
 def _reopen_world_map_for_recenter(sct, full_mon):
-    """Close and reopen world map once to recenter map position."""
     print("[SAT] recenter: closing and reopening world map")
-    # Only close with Esc if the map is actually open right now.
-    # Pressing Esc when no map is open would open the pause menu instead.
     current = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(current):
         tap_key('esc', hold_time=0.08)
         if not sleep_interruptible(0.45):
             return None
     elif is_pause_menu_visible(current):
-        print("[SAT] recenter: closing pause menu before reopening map")
         tap_key('esc', hold_time=0.08)
         if not sleep_interruptible(0.32):
             return None
@@ -775,100 +718,54 @@ def _reopen_world_map_for_recenter(sct, full_mon):
 
 
 def run_vote_reset_sequence(sct, full_mon):
-    """Open ESC menu, vote reset, open map, pick red satanic node, fallback to fixed node."""
+    """Shift+R primary vote reset; single-pass ESC menu fallback."""
     release_all_inputs()
-    # Let any in-progress skill animation finish before pressing ESC.
-    if not sleep_interruptible(0.70):
-        return False
+    sleep_interruptible(0.50)
 
-    # Ensure we start from clean gameplay state (no menus open).
-    # Close world map if visible, or close any stray pause menu with a second check.
-    frame0 = grab_frame_bgr(sct, full_mon)
-    if is_world_map_visible(frame0):
-        print("[RST] world map open -> closing before vote reset menu")
-        tap_key('esc', hold_time=0.08)
-        if not sleep_interruptible(0.45):
-            return False
-        # Verify world map actually closed; if Esc opened a different menu, close that too.
-        frame_check = grab_frame_bgr(sct, full_mon)
-        if is_world_map_visible(frame_check):
-            print("[RST] map still visible after close attempt – retrying Esc")
-            tap_key('esc', hold_time=0.08)
-            if not sleep_interruptible(0.35):
-                return False
-    else:
-        # If pause menu is already open, close it so the next ESC opens a fresh menu.
-        if is_pause_menu_visible(frame0):
-            print("[RST] pause menu open -> closing before vote reset menu")
-            tap_key('esc', hold_time=0.08)
-            if not sleep_interruptible(0.35):
-                return False
+    # Primary: Shift+R shortcut
+    print("[RST] sending Shift+R vote reset")
+    tap_key_shifted(VOTE_RESET_SHORTCUT_KEY, hold_time=0.06)
+    sleep_interruptible(VOTE_RESET_SHORTCUT_WAIT_SECONDS)
+
+    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
+    sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
+
+    map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
+    if map_visible:
+        return pick_zone_from_open_map(sct, full_mon, frame)
+
+    # Fallback: single-pass ESC menu
+    print("[RST] Shift+R did not open map -> ESC menu fallback")
+    sleep_interruptible(0.30)
 
     if not _ensure_pause_menu_open(sct, full_mon):
-        print("[RST] pause menu not confirmed -> using fallback vote-reset click path")
+        print("[RST] pause menu not confirmed -> using force fallback")
         return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
 
-    # Let the menu fully render before clicking vote reset.
-    if not sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS):
-        return False
+    sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3)
 
     if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
         return False
-    if not sleep_interruptible(VOTE_RESET_TO_INTERACT_DELAY):
-        return False
 
-    # If the pause menu is still visible the click missed — retry before pressing F.
-    check_frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(check_frame) or len(_find_pause_menu_button_rows(check_frame)) >= 2:
-        print("[RST] pause menu still open after vote click -> retrying click")
-        if not sleep_interruptible(VOTE_RESET_CLICK_RETRY_DELAY):
-            return False
-        if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
-            return False
-        if not sleep_interruptible(VOTE_RESET_TO_INTERACT_DELAY):
-            return False
-
-    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.06)
-    if not sleep_interruptible(MAP_OPEN_DELAY_SECONDS):
-        return False
+    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
+    sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
 
     map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
-    if not map_visible:
-        if not sleep_interruptible(VOTE_RESET_SECOND_PASS_DELAY_SECONDS):
-            return False
-        print("[RST] second vote-reset click pass")
-        if not _ensure_pause_menu_open(sct, full_mon):
-            print("[RST] pause menu not confirmed for second pass -> using fallback click path")
-            return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_SECOND_PASS_ATTEMPTS)
-        if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_SECOND_PASS_ATTEMPTS):
-            return False
-        if not sleep_interruptible(0.20):
-            return False
-        tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.06)
-        if not sleep_interruptible(MAP_OPEN_DELAY_SECONDS):
-            return False
-        map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
-        if not map_visible:
-            return False
+    if map_visible:
+        return pick_zone_from_open_map(sct, full_mon, frame)
 
-    return pick_zone_from_open_map(sct, full_mon, frame)
+    print("[RST] vote reset failed after all retries")
+    return False
 
 
 def pick_zone_from_open_map(sct, full_mon, frame=None):
-    """Find and click the satanic node (or fallback) on an already-open world map.
-
-    `frame` is an optional pre-captured BGR image of the open map; if None a
-    fresh frame is grabbed.  Returns True when the map closes (zone selected).
-    """
     if frame is None:
         frame = grab_frame_bgr(sct, full_mon)
 
-    # Use the same deterministic recenter flow as respawn handling before scans.
     recentered_frame = _reopen_world_map_for_recenter(sct, full_mon)
     red_node = None
-    # If recenter failed, always grab a fresh frame — never use the pre-vote-reset
-    # frame which shows the old zone with no red satanic node highlighted.
     scan_frame = recentered_frame if recentered_frame is not None else grab_frame_bgr(sct, full_mon)
+
     for attempt in range(1, SATANIC_NODE_SCAN_ATTEMPTS + 1):
         if scan_frame is None:
             scan_frame = grab_frame_bgr(sct, full_mon)
@@ -885,11 +782,9 @@ def pick_zone_from_open_map(sct, full_mon, frame=None):
         print(f"[RST] satanic node picked at {red_node}")
         click_x = red_node[0] + SATANIC_NODE_CLICK_X_OFFSET
         click_y = red_node[1] + SATANIC_NODE_CLICK_Y_OFFSET
-        r       = SATANIC_NODE_CLICK_RING_RADIUS_PX
-        satanic_offsets = [
-            (0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
-            (r // 2, -r // 2), (-r // 2, -r // 2),
-        ]
+        r = SATANIC_NODE_CLICK_RING_RADIUS_PX
+        satanic_offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
+                           (r // 2, -r // 2), (-r // 2, -r // 2)]
         if not _try_select_node_with_offsets(sct, full_mon, click_x, click_y, satanic_offsets):
             return False
         if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
@@ -921,8 +816,6 @@ def perform_corner_escape_burst(
     preferred_dx=None, preferred_dy=None,
     minimap_bgr=None, center=None,
 ):
-    """Try short burst pattern, preferring recent enemy direction and walkable lanes."""
-
     def _valid(dx, dy):
         return dx is not None and dy is not None and (abs(dx) + abs(dy)) > 0
 
@@ -943,19 +836,19 @@ def perform_corner_escape_burst(
                 vlen = math.hypot(vx, vy)
                 if vlen < 1e-6:
                     continue
-                tx    = int(max(0, min(minimap_bgr.shape[1] - 1, center[0] + (vx / vlen) * 40)))
-                ty    = int(max(0, min(minimap_bgr.shape[0] - 1, center[1] + (vy / vlen) * 40)))
+                tx = int(max(0, min(minimap_bgr.shape[1] - 1, center[0] + (vx / vlen) * 40)))
+                ty = int(max(0, min(minimap_bgr.shape[0] - 1, center[1] + (vy / vlen) * 40)))
                 score = ray_walkability_score(walk_mask, center, (tx, ty), samples=14)
                 if score > best_score:
                     best_score = score
-                    best_vec   = (vx, vy)
+                    best_vec = (vx, vy)
             if best_vec is not None:
                 seed_dx, seed_dy = best_vec
 
     sequence = [
         (seed_dx, seed_dy),
-        (-seed_dy,  seed_dx),
-        ( seed_dy, -seed_dx),
+        (-seed_dy, seed_dx),
+        (seed_dy, -seed_dx),
         (-seed_dx, -seed_dy),
     ]
     for dx, dy in sequence:
