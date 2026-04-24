@@ -1,14 +1,39 @@
+"""
+SiegeScouter GUI — native Tkinter (no extra deps)
+Drop-in replacement for gui.py. Works on any Python version with tkinter.
+
+Optional: patch main.run() to accept `on_vote_reset=callback` — the GUI
+will bump the reset counter each time it fires. If you don't patch, the
+counter will stay at 0 (everything else works).
+"""
+
+import io
+import inspect
+import queue
 import sys
 import threading
+import time
+import traceback
 import tkinter as tk
-from tkinter import scrolledtext
-import io
-import queue
+from tkinter import font as tkfont
 
 import config
 
 
-# ── stdout redirect ────────────────────────────────────────────────────────────
+# ── palette (SiegeScout) ─────────────────────────────────────────────────────
+BG = "#1a1c1a"
+SURFACE = "#232623"
+BORDER = "#363a35"
+FG = "#d4cfa0"
+FG_MUTE = "#7a7d6a"
+BLUE = "#5b9bd5"
+GREEN = "#5aaa46"
+RED = "#c94040"
+YELLOW = "#d4aa40"
+MAUVE = "#9b7fd4"
+PEACH = "#c87d3a"
+LOG_BG = "#111311"
+
 
 class _QueueWriter(io.TextIOBase):
     def __init__(self, q: queue.Queue):
@@ -20,114 +45,270 @@ class _QueueWriter(io.TextIOBase):
         return len(text)
 
     def flush(self):
-        pass
+        return None
 
 
-# ── main GUI ───────────────────────────────────────────────────────────────────
+class HoverButton(tk.Label):
+    """A tk.Label styled as a pill button with hover + click."""
+
+    def __init__(self, parent, text, command, bg, fg, hover_bg=None, pady=10, padx=16, font=None):
+        super().__init__(
+            parent,
+            text=text,
+            bg=bg,
+            fg=fg,
+            font=font,
+            padx=padx,
+            pady=pady,
+            cursor="hand2",
+        )
+        self._bg = bg
+        self._hover = hover_bg or bg
+        self._cmd = command
+        self.bind("<Enter>", lambda e: self.config(bg=self._hover))
+        self.bind("<Leave>", lambda e: self.config(bg=self._bg))
+        self.bind("<Button-1>", lambda e: self._cmd() if self._cmd else None)
+
+    def set_style(self, text, bg, fg, hover_bg):
+        self._bg = bg
+        self._hover = hover_bg
+        self.config(text=text, bg=bg, fg=fg)
+
+
+class PulseDot(tk.Canvas):
+    """Small colored dot that pulses while alive."""
+
+    def __init__(self, parent, color=GREEN, size=10):
+        super().__init__(
+            parent,
+            width=size + 4,
+            height=size + 4,
+            bg=parent.cget("bg"),
+            highlightthickness=0,
+        )
+        self._size = size
+        self._color = color
+        self._alive = False
+        self._phase = 0
+        self._item = self.create_oval(2, 2, size + 2, size + 2, fill=color, outline="")
+        self._halo = self.create_oval(2, 2, size + 2, size + 2, outline=color, width=1)
+
+    def set(self, alive, color=None):
+        self._alive = alive
+        if color:
+            self._color = color
+        self.itemconfig(self._item, fill=self._color)
+        self.itemconfig(self._halo, outline=self._color)
+        if alive:
+            self._tick()
+
+    def _tick(self):
+        if not self._alive:
+            self.coords(self._halo, 2, 2, self._size + 2, self._size + 2)
+            return
+        self._phase = (self._phase + 1) % 30
+        grow = self._phase / 30.0 * 6
+        x0 = 2 - grow
+        y0 = 2 - grow
+        x1 = self._size + 2 + grow
+        y1 = self._size + 2 + grow
+        self.coords(self._halo, x0, y0, x1, y1)
+        self.after(50, self._tick)
+
+
+class Switch(tk.Canvas):
+    """iOS-style toggle switch."""
+
+    def __init__(self, parent, initial=False, disabled=False, onchange=None):
+        super().__init__(
+            parent,
+            width=36,
+            height=22,
+            bg=parent.cget("bg"),
+            highlightthickness=0,
+            cursor="arrow" if disabled else "hand2",
+        )
+        self._on = bool(initial)
+        self._disabled = disabled
+        self._cb = onchange
+        self._track = self.create_rectangle(0, 2, 36, 20, fill=self._track_color(), outline="")
+        self._knob = self.create_oval(2, 3, 18, 19, fill=FG, outline="")
+        self._redraw()
+        if not disabled:
+            self.bind("<Button-1>", self._toggle)
+
+    def _track_color(self):
+        if self._disabled:
+            return "#3c3c50"
+        return GREEN if self._on else "#3c3c50"
+
+    def _redraw(self):
+        self.itemconfig(self._track, fill=self._track_color())
+        x = 16 if self._on else 0
+        self.coords(self._knob, 2 + x, 3, 18 + x, 19)
+        self.itemconfig(self._knob, fill=BG if self._on else FG)
+        if self._disabled:
+            self.itemconfig(self._knob, fill="#5c5c70")
+
+    def _toggle(self, _):
+        self._on = not self._on
+        self._redraw()
+        if self._cb:
+            self._cb(self._on)
+
+    def get(self):
+        return self._on
+
 
 class BotUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Hero Siege Bot")
+        self.title("SiegeScouter")
+        self.configure(bg=BG)
         self.resizable(False, False)
-        self.configure(bg="#1e1e2e")
+        try:
+            self.tk.call("tk", "scaling", 1.1)
+        except Exception:
+            pass
 
         self._stop_event: threading.Event | None = None
         self._bot_thread: threading.Thread | None = None
         self._log_queue: queue.Queue = queue.Queue()
         self._orig_stdout = sys.stdout
         self._orig_stderr = sys.stderr
+        self._reset_count = 0
+        self._runtime_sec = 0
+        self._runtime_job = None
+
+        self.f_ui = tkfont.Font(family="Segoe UI", size=10)
+        self.f_ui_bold = tkfont.Font(family="Segoe UI", size=10, weight="bold")
+        self.f_title = tkfont.Font(family="Segoe UI", size=13, weight="bold")
+        self.f_mono = tkfont.Font(family="Consolas", size=9)
+        self.f_mono_bold = tkfont.Font(family="Consolas", size=9, weight="bold")
+        self.f_cta = tkfont.Font(family="Segoe UI", size=11, weight="bold")
+        self.f_huge = tkfont.Font(family="Segoe UI", size=26, weight="bold")
+        self.f_cap = tkfont.Font(family="Consolas", size=8, weight="bold")
 
         self._build_ui()
-        self.after(100, self._poll_log)
+        self.report_callback_exception = self._on_tk_exception
+        self.after(80, self._poll_log)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-
-    # ── UI construction ────────────────────────────────────────────────────────
+        self.geometry("460x660")
 
     def _build_ui(self):
-        PAD = dict(padx=10, pady=6)
-        BG  = "#1e1e2e"
-        FG  = "#cdd6f4"
-        ACC = "#89b4fa"
-        SEP = "#313244"
+        pad = 14
+        root = tk.Frame(self, bg=BG)
+        root.pack(fill=tk.BOTH, expand=True, padx=pad, pady=pad)
 
-        # ── header ──
-        hdr = tk.Frame(self, bg="#181825", pady=6)
-        hdr.pack(fill=tk.X)
-        tk.Label(hdr, text="Hero Siege Bot", font=("Segoe UI", 14, "bold"),
-                 bg="#181825", fg=ACC).pack()
+        header = tk.Frame(root, bg=BG)
+        header.pack(fill=tk.X)
 
-        # ── status row ──
-        status_row = tk.Frame(self, bg=BG)
-        status_row.pack(fill=tk.X, **PAD)
-        tk.Label(status_row, text="Status:", bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).pack(side=tk.LEFT)
-        self._status_var = tk.StringVar(value="Idle")
-        self._status_lbl = tk.Label(status_row, textvariable=self._status_var,
-                                    bg=BG, fg="#a6e3a1", font=("Segoe UI", 10, "bold"))
-        self._status_lbl.pack(side=tk.LEFT, padx=6)
+        brand = tk.Frame(header, bg=BG)
+        brand.pack(side=tk.LEFT)
 
-        # ── start/stop button ──
-        self._start_btn = tk.Button(self, text="▶  Start Bot",
-                                    command=self._toggle_bot,
-                                    font=("Segoe UI", 11, "bold"),
-                                    bg="#a6e3a1", fg="#1e1e2e",
-                                    activebackground="#94d3a0",
-                                    relief=tk.FLAT, cursor="hand2",
-                                    padx=20, pady=6)
-        self._start_btn.pack(padx=10, pady=(0, 6))
+        logo = tk.Label(brand, text="SS", bg=BLUE, fg=BG, font=self.f_title, padx=8, pady=4)
+        logo.pack(side=tk.LEFT, padx=(0, 10))
 
-        # ── separator ──
-        tk.Frame(self, bg=SEP, height=1).pack(fill=tk.X, padx=10)
+        brand_text = tk.Frame(brand, bg=BG)
+        brand_text.pack(side=tk.LEFT)
+        tk.Label(brand_text, text="SiegeScouter", bg=BG, fg=FG, font=self.f_title).pack(anchor=tk.W)
+        tk.Label(brand_text, text="by Biggorinho · v0.4", bg=BG, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
 
-        # ── options ──
-        opt_frame = tk.LabelFrame(self, text="Options", bg=BG, fg=ACC,
-                                  font=("Segoe UI", 10, "bold"),
-                                  bd=1, relief=tk.GROOVE)
-        opt_frame.pack(fill=tk.X, padx=10, pady=8)
+        status = tk.Frame(header, bg=BG)
+        status.pack(side=tk.RIGHT, pady=4)
+        self._pulse = PulseDot(status, color=FG_MUTE)
+        self._pulse.pack(side=tk.LEFT, padx=(0, 4))
+        self._status_lbl = tk.Label(status, text="Idle", bg=BG, fg=FG_MUTE, font=self.f_ui_bold)
+        self._status_lbl.pack(side=tk.LEFT)
 
-        def _chk(parent, label, default, enabled=True):
-            var = tk.BooleanVar(value=default)
-            tk.Checkbutton(parent, text=label, variable=var,
-                           bg=BG, fg=FG, selectcolor=SEP,
-                           activebackground=BG, activeforeground=FG,
-                           font=("Segoe UI", 10),
-                           state=(tk.NORMAL if enabled else tk.DISABLED),
-                           disabledforeground="#7f849c").pack(anchor=tk.W, padx=8, pady=1)
-            return var
+        cta_row = tk.Frame(root, bg=BG)
+        cta_row.pack(fill=tk.X, pady=(14, 0))
 
-        self._death_var   = _chk(opt_frame, "Enable Death Handling",  config.ENABLE_DEATH_HANDLING)
-        self._mining_var  = _chk(opt_frame, "Enable Mining (Coming soon)", False, enabled=False)
-        self._loot_items_var = _chk(opt_frame, "Enable Loot Items (Coming soon)", False, enabled=False)
+        self._cta = HoverButton(
+            cta_row,
+            text="▶  Start Bot",
+            command=self._toggle_bot,
+            bg=GREEN,
+            fg="#14341b",
+            hover_bg="#b8ecb4",
+            pady=12,
+            padx=16,
+            font=self.f_cta,
+        )
+        self._cta.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # ── separator ──
-        tk.Frame(self, bg=SEP, height=1).pack(fill=tk.X, padx=10)
+        reset_card = tk.Frame(cta_row, bg=SURFACE, padx=14, pady=8, highlightbackground=BORDER, highlightthickness=1)
+        reset_card.pack(side=tk.LEFT, padx=(10, 0))
+        tk.Label(reset_card, text="RESETS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W)
+        self._reset_lbl = tk.Label(reset_card, text="0", bg=SURFACE, fg=MAUVE, font=self.f_huge)
+        self._reset_lbl.pack(anchor=tk.W, pady=(2, 0))
+        tk.Label(reset_card, text="session", bg=SURFACE, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
 
-        # ── log area ──
-        log_frame = tk.LabelFrame(self, text="Log", bg=BG, fg=ACC,
-                                  font=("Segoe UI", 10, "bold"),
-                                  bd=1, relief=tk.GROOVE)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        opt = tk.Frame(root, bg=SURFACE, padx=14, pady=12, highlightbackground=BORDER, highlightthickness=1)
+        opt.pack(fill=tk.X, pady=(14, 0))
+        tk.Label(opt, text="OPTIONS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W, pady=(0, 8))
 
-        self._log = scrolledtext.ScrolledText(
-            log_frame, height=14, width=62,
-            bg="#11111b", fg="#cdd6f4",
-            font=("Consolas", 9),
-            state=tk.DISABLED, relief=tk.FLAT,
+        def _row(parent, label, default, enabled=True, soon=False):
+            row = tk.Frame(parent, bg=SURFACE)
+            row.pack(fill=tk.X, pady=3)
+            tk.Label(row, text=label, bg=SURFACE, fg=FG if enabled else FG_MUTE, font=self.f_ui).pack(side=tk.LEFT)
+            if soon:
+                tag = tk.Label(row, text=" SOON ", bg="#3a2a1a", fg=PEACH, font=self.f_cap, padx=4)
+                tag.pack(side=tk.LEFT, padx=(8, 0))
+            sw = Switch(row, initial=default, disabled=not enabled)
+            sw.pack(side=tk.RIGHT)
+            return sw
+
+        self._death_sw = _row(opt, "Enable Death Handling", getattr(config, "ENABLE_DEATH_HANDLING", True))
+        self._mining_sw = _row(opt, "Enable Mining", False, enabled=False, soon=True)
+        self._loot_sw = _row(opt, "Enable Loot Items", False, enabled=False, soon=True)
+
+        log_card = tk.Frame(root, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
+        log_card.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
+
+        log_head = tk.Frame(log_card, bg=SURFACE)
+        log_head.pack(fill=tk.X, padx=12, pady=(10, 8))
+        tk.Label(log_head, text="LOG", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
+        self._log_count = tk.Label(log_head, text="0 lines", bg=SURFACE, fg=BLUE, font=self.f_cap)
+        self._log_count.pack(side=tk.LEFT, padx=(8, 0))
+        clear = tk.Label(log_head, text="clear ⌫", bg=SURFACE, fg=FG_MUTE, font=self.f_ui, cursor="hand2")
+        clear.pack(side=tk.RIGHT)
+        clear.bind("<Button-1>", lambda e: self._clear_log())
+
+        log_frame = tk.Frame(log_card, bg=LOG_BG)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=(0, 0))
+
+        self._log = tk.Text(
+            log_frame,
+            height=12,
+            bg=LOG_BG,
+            fg=FG,
+            font=self.f_mono,
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=8,
+            wrap=tk.NONE,
+            state=tk.DISABLED,
             insertbackground=FG,
         )
-        self._log.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = tk.Scrollbar(log_frame, command=self._log.yview, bg=SURFACE, troughcolor=LOG_BG, bd=0, highlightthickness=0)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._log.config(yscrollcommand=sb.set)
 
-        clear_btn = tk.Button(log_frame, text="Clear Log",
-                              command=self._clear_log,
-                              font=("Segoe UI", 9),
-                              bg=SEP, fg=FG, relief=tk.FLAT,
-                              cursor="hand2", padx=8, pady=2)
-        clear_btn.pack(anchor=tk.E, padx=4, pady=(0, 4))
+        self._log.tag_config("time", foreground=FG_MUTE)
+        self._log.tag_config("info", foreground=BLUE)
+        self._log.tag_config("ok", foreground=GREEN)
+        self._log.tag_config("warn", foreground=YELLOW)
+        self._log.tag_config("err", foreground=RED)
+        self._log.tag_config("reset", foreground=MAUVE, font=self.f_mono_bold)
 
-        self.geometry("560x540")
-
-    # ── bot lifecycle ──────────────────────────────────────────────────────────
+        footer = tk.Frame(root, bg=BG)
+        footer.pack(fill=tk.X, pady=(10, 0))
+        self._runtime_lbl = tk.Label(footer, text="runtime · 00:00:00", bg=BG, fg=FG_MUTE, font=("Consolas", 9))
+        self._runtime_lbl.pack(side=tk.LEFT)
+        tk.Label(footer, text="emergency stop  F8", bg=BG, fg=FG_MUTE, font=("Consolas", 9)).pack(side=tk.RIGHT)
 
     def _toggle_bot(self):
         if self._bot_thread and self._bot_thread.is_alive():
@@ -142,24 +323,34 @@ class BotUI(tk.Tk):
         sys.stdout = _QueueWriter(self._log_queue)
         sys.stderr = _QueueWriter(self._log_queue)
 
-        kwargs = dict(
-            stop_event=self._stop_event,
-            enable_death_handling=self._death_var.get(),
-            enable_mining=self._mining_var.get(),
-            enable_loot_items=self._loot_items_var.get(),
-        )
+        kwargs = {
+            "stop_event": self._stop_event,
+            "enable_death_handling": self._death_sw.get(),
+            "enable_mining": self._mining_sw.get(),
+            "enable_loot_items": self._loot_sw.get(),
+        }
+        try:
+            sig = inspect.signature(_main.run)
+            if "on_vote_reset" in sig.parameters:
+                kwargs["on_vote_reset"] = self._on_vote_reset
+        except Exception:
+            pass
+
         self._bot_thread = threading.Thread(target=_main.run, kwargs=kwargs, daemon=True)
         self._bot_thread.start()
 
-        self._start_btn.config(text="■  Stop Bot", bg="#f38ba8", activebackground="#d37898")
-        self._status_var.set("Running")
-        self._status_lbl.config(fg="#f38ba8")
+        self._cta.set_style("■  Stop Bot", bg=RED, fg="#3a1420", hover_bg="#f8a3ba")
+        self._status_lbl.config(text="Running", fg=GREEN)
+        self._pulse.set(alive=True, color=GREEN)
+        self._push_log("Bot started — mode: explore", "info")
+        self._start_runtime()
         self.after(500, self._watch_thread)
 
     def _stop_bot(self):
         if self._stop_event:
             self._stop_event.set()
-        self._start_btn.config(state=tk.DISABLED, text="Stopping…")
+        self._cta.set_style("Stopping...", bg="#3c3c50", fg=FG_MUTE, hover_bg="#3c3c50")
+        self._push_log("Stop requested...", "warn")
         self.after(300, self._check_stopped)
 
     def _check_stopped(self):
@@ -177,21 +368,69 @@ class BotUI(tk.Tk):
     def _on_bot_finished(self):
         sys.stdout = self._orig_stdout
         sys.stderr = self._orig_stderr
-        self._start_btn.config(text="▶  Start Bot", bg="#a6e3a1",
-                               activebackground="#94d3a0", state=tk.NORMAL)
-        self._status_var.set("Idle")
-        self._status_lbl.config(fg="#a6e3a1")
+        self._cta.set_style("▶  Start Bot", bg=GREEN, fg="#14341b", hover_bg="#b8ecb4")
+        self._status_lbl.config(text="Idle", fg=FG_MUTE)
+        self._pulse.set(alive=False, color=FG_MUTE)
+        self._push_log("Bot stopped", "err")
+        self._stop_runtime()
 
-    # ── log polling ────────────────────────────────────────────────────────────
+    def _on_vote_reset(self):
+        self.after(0, self._bump_reset)
+
+    def _bump_reset(self):
+        self._reset_count += 1
+        self._reset_lbl.config(text=str(self._reset_count))
+        self._push_log("Vote reset triggered", "reset")
+
+    def _start_runtime(self):
+        self._runtime_sec = 0
+        self._tick_runtime()
+
+    def _stop_runtime(self):
+        if self._runtime_job:
+            self.after_cancel(self._runtime_job)
+            self._runtime_job = None
+
+    def _tick_runtime(self):
+        h = self._runtime_sec // 3600
+        m = (self._runtime_sec % 3600) // 60
+        s = self._runtime_sec % 60
+        self._runtime_lbl.config(text=f"runtime · {h:02d}:{m:02d}:{s:02d}")
+        self._runtime_sec += 1
+        self._runtime_job = self.after(1000, self._tick_runtime)
+
+    def _classify(self, line: str) -> str:
+        low = line.lower()
+        if "vote reset" in low and "triggered" in low:
+            return "reset"
+        if any(w in low for w in ("error", "failed", "exception")):
+            return "err"
+        if any(w in low for w in ("stuck", "warn", "flee", "lockout")):
+            return "warn"
+        if any(w in low for w in ("kill", "respawn", "ok ")):
+            return "ok"
+        if any(w in low for w in ("start", "mode:", "zone:", "enemy", "explor")):
+            return "info"
+        return ""
+
+    def _push_log(self, msg: str, cls: str = ""):
+        ts = time.strftime("%H:%M:%S")
+        self._log.config(state=tk.NORMAL)
+        self._log.insert(tk.END, f"[{ts}] ", "time")
+        self._log.insert(tk.END, msg + "\n", cls or self._classify(msg))
+        self._log.see(tk.END)
+        self._log.config(state=tk.DISABLED)
+        lines = int(self._log.index("end-1c").split(".")[0]) - 1
+        self._log_count.config(text=f"{lines} line{'' if lines == 1 else 's'}")
 
     def _poll_log(self):
         try:
             while True:
                 text = self._log_queue.get_nowait()
-                self._log.config(state=tk.NORMAL)
-                self._log.insert(tk.END, text)
-                self._log.see(tk.END)
-                self._log.config(state=tk.DISABLED)
+                for line in text.splitlines():
+                    line = line.rstrip()
+                    if line:
+                        self._push_log(line)
         except queue.Empty:
             pass
         self.after(80, self._poll_log)
@@ -200,8 +439,15 @@ class BotUI(tk.Tk):
         self._log.config(state=tk.NORMAL)
         self._log.delete("1.0", tk.END)
         self._log.config(state=tk.DISABLED)
+        self._log_count.config(text="0 lines")
 
-    # ── close ──────────────────────────────────────────────────────────────────
+    def _on_tk_exception(self, exc, val, tb):
+        # Surface UI callback errors inside the log panel instead of failing silently.
+        self._push_log("GUI callback error", "err")
+        for line in traceback.format_exception(exc, val, tb):
+            for part in line.rstrip().splitlines():
+                if part:
+                    self._push_log(part, "err")
 
     def _on_close(self):
         if self._bot_thread and self._bot_thread.is_alive():
@@ -218,7 +464,6 @@ def main():
     try:
         app.mainloop()
     except KeyboardInterrupt:
-        # Allow clean terminal stop (Ctrl+C) without traceback noise.
         app._on_close()
 
 
