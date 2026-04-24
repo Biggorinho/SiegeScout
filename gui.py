@@ -9,6 +9,7 @@ counter will stay at 0 (everything else works).
 
 import io
 import inspect
+import os
 import queue
 import sys
 import threading
@@ -16,6 +17,7 @@ import time
 import traceback
 import tkinter as tk
 from tkinter import font as tkfont
+from PIL import Image, ImageTk
 
 import config
 
@@ -33,6 +35,20 @@ YELLOW = "#d4aa40"
 MAUVE = "#9b7fd4"
 PEACH = "#c87d3a"
 LOG_BG = "#111311"
+
+LOGO_FILE = "logo.png"
+
+
+def _asset(name: str) -> str:
+    for base in (
+        os.path.dirname(os.path.abspath(__file__)),
+        os.path.dirname(sys.executable),
+        ".",
+    ):
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            return path
+    return name
 
 
 class _QueueWriter(io.TextIOBase):
@@ -163,7 +179,7 @@ class Switch(tk.Canvas):
 class BotUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("SiegeScouter")
+        self.title("SiegeScout")
         self.configure(bg=BG)
         self.resizable(False, False)
         try:
@@ -206,12 +222,17 @@ class BotUI(tk.Tk):
         brand = tk.Frame(header, bg=BG)
         brand.pack(side=tk.LEFT)
 
-        logo = tk.Label(brand, text="SS", bg=BLUE, fg=BG, font=self.f_title, padx=8, pady=4)
+        try:
+            _img = Image.open(_asset(LOGO_FILE)).resize((48, 48), Image.LANCZOS)
+            self._logo_img = ImageTk.PhotoImage(_img)
+            logo = tk.Label(brand, image=self._logo_img, bg=BG, bd=0)
+        except Exception:
+            logo = tk.Label(brand, text="SS", bg=BLUE, fg=BG, font=self.f_title, padx=8, pady=4)
         logo.pack(side=tk.LEFT, padx=(0, 10))
 
         brand_text = tk.Frame(brand, bg=BG)
         brand_text.pack(side=tk.LEFT)
-        tk.Label(brand_text, text="SiegeScouter", bg=BG, fg=FG, font=self.f_title).pack(anchor=tk.W)
+        tk.Label(brand_text, text="SiegeScout", bg=BG, fg=FG, font=self.f_title).pack(anchor=tk.W)
         tk.Label(brand_text, text="by Biggorinho · v0.4", bg=BG, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
 
         status = tk.Frame(header, bg=BG)
