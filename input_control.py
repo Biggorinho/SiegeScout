@@ -21,7 +21,7 @@ def sleep_interruptible(duration, step=0.02):
     """Sleep in short slices; return False if user pressed F1 or p."""
     end_t = time.time() + max(0.0, duration)
     while time.time() < end_t:
-        if keyboard.is_pressed('f1') or keyboard.is_pressed('p'):
+        if keyboard.is_pressed('f1') or keyboard.is_pressed('f8') or keyboard.is_pressed('p'):
             return False
         time.sleep(min(step, max(0.0, end_t - time.time())))
     return True
@@ -62,6 +62,14 @@ def tap_key(key_name, hold_time=0.05):
     keyboard.press(key_name)
     sleep_interruptible(hold_time)
     keyboard.release(key_name)
+
+
+def tap_key_shifted(key_name, hold_time=0.05):
+    keyboard.press('shift')
+    keyboard.press(key_name)
+    sleep_interruptible(hold_time)
+    keyboard.release(key_name)
+    keyboard.release('shift')
 
 
 def tap_key_uninterruptible(key_name, hold_time=0.05):
