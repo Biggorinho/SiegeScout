@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -11,9 +12,21 @@ from detectors import classify_enemy_dots
 
 def _load_minimap_from_debug(name: str):
     path = Path(__file__).resolve().parent.parent / "debug" / name
+    if not path.exists():
+        pytest.skip(f"missing debug fixture: {name}")
     image = cv2.imread(str(path))
-    assert image is not None, f"missing debug fixture: {name}"
+    assert image is not None, f"failed to decode debug fixture: {name}"
     return image[:, : image.shape[1] // 3].copy()
+
+
+def test_classify_enemy_dots_detects_synthetic_skull_blob():
+    minimap = np.zeros((120, 120, 3), dtype=np.uint8)
+    cv2.circle(minimap, (80, 40), 6, (235, 235, 235), -1)
+    cv2.circle(minimap, (80, 40), 3, (120, 120, 120), -1)
+
+    dots = classify_enemy_dots(minimap)
+
+    assert any(kind == "skull" for _, _, _, kind in dots)
 
 
 def test_classify_enemy_dots_keeps_real_skull_frame():

@@ -1,18 +1,22 @@
 import cv2
 import numpy as np
 import math
+import time
 
 from config import (
     HP_BAR, PLAYER_EXCLUSION_RADIUS, PLAYER_EXCLUSION_RADIUS_FRAC,
     ITEM_MATCH_THRESHOLD, SCREEN_W, SCREEN_H,
     COMPANION_WHITE_SUPPRESS_RADIUS, COMPANION_WHITE_MIN_V, COMPANION_WHITE_MAX_S,
+    SKULL_DEBUG_SAVE_REJECTED_CANDIDATES, SKULL_DEBUG_REJECTED_COOLDOWN_SECONDS,
 )
+from debug_utils import save_skull_reject_snapshot
 
 
 ENEMY_TIER_SKULL = 4
 ENEMY_TIER_YELLOW = 3
 ENEMY_TIER_PURPLE = 2
 ENEMY_TIER_RED = 1
+_LAST_SKULL_REJECT_SNAPSHOT_T = 0.0
 
 
 def _contour_shape_stats(cnt):
@@ -82,12 +86,12 @@ def _is_enemy_like(stats, kind):
         return False
     if kind == "skull":
         return (
-            8 <= stats["area"] <= 220
-            and 0.55 <= stats["aspect"] <= 1.75
-            and stats["circularity"] >= 0.20
-            and stats["solidity"] >= 0.60
-            and stats["extent"] >= 0.26
-            and stats["defects"] <= 6
+            8 <= stats["area"] <= 260
+            and 0.45 <= stats["aspect"] <= 1.90
+            and stats["circularity"] >= 0.16
+            and stats["solidity"] >= 0.52
+            and stats["extent"] >= 0.22
+            and stats["defects"] <= 12
         )
     return stats["area"] >= 3 and stats["circularity"] >= 0.42 and stats["solidity"] >= 0.72 and stats["defects"] <= 3
 
@@ -115,7 +119,7 @@ def classify_enemy_dots(minimap_bgr):
     r2    = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
     p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
     y     = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
-    skull = cv2.inRange(hsv, np.array([0, 0, 148]),     np.array([180, 55, 245]))
+    skull = cv2.inRange(hsv, np.array([0, 0, 138]),     np.array([180, 65, 255]))
 
     h, w = minimap_bgr.shape[:2]
     cx0  = w // 2
@@ -164,18 +168,23 @@ def classify_enemy_dots(minimap_bgr):
         val_mean = float(np.mean(patch[:, :, 2]))
         return orange_yellow_ratio >= 0.08 and sat_mean >= 70.0 and val_mean >= 85.0
 
-    def _looks_like_large_skull_blob(cnt, stats):
+    def _looks_like_large_skull_blob(cnt, stats, reject_reason=None):
+        def _rej(reason):
+            if reject_reason is not None:
+                reject_reason[0] = reason
+            return False
+
         if stats is None:
-            return False
+            return _rej("missing_stats")
         if not (
-            8 <= stats["area"] <= 220
-            and 0.72 <= stats["aspect"] <= 1.35
-            and stats["circularity"] >= 0.22
-            and stats["solidity"] >= 0.78
-            and 0.22 <= stats["extent"] <= 0.75
-            and 0 <= stats["defects"] <= 5
+            8 <= stats["area"] <= 320
+            and 0.62 <= stats["aspect"] <= 1.55
+            and stats["circularity"] >= 0.18
+            and stats["solidity"] >= 0.68
+            and 0.18 <= stats["extent"] <= 0.84
+            and 0 <= stats["defects"] <= 10
         ):
-            return False
+            return _rej("large_shape_gate")
 
         x, y0, bw, bh = cv2.boundingRect(cnt)
         pad = 2
@@ -185,29 +194,36 @@ def classify_enemy_dots(minimap_bgr):
         y1 = min(h, y0 + bh + pad)
         patch = hsv[y0:y1, x0:x1]
         if patch.size == 0:
-            return False
+            return _rej("empty_patch")
 
         sat_mean = float(np.mean(patch[:, :, 1]))
         val_std = float(np.std(patch[:, :, 2]))
-        if sat_mean > 65.0:
-            return False
-        if val_std < 12.0:
+        if sat_mean > 75.0:
+            return _rej("large_sat_high")
+        if val_std < 8.0:
+            return _rej("large_val_std_low")
+
+        if _looks_like_orange_companion(cnt, True):
+            return _rej("orange_companion")
+        return True
+
+    def _looks_like_real_skull(cnt, stats, cx, cy, reject_reason=None):
+        def _rej(reason):
+            if reject_reason is not None:
+                reject_reason[0] = reason
             return False
 
-        return not _looks_like_orange_companion(cnt, True)
-
-    def _looks_like_real_skull(cnt, stats, cx, cy):
         if stats is None:
-            return False
+            return _rej("missing_stats")
         if not (
-            8 <= stats["area"] <= 120
-            and 0.85 <= stats["aspect"] <= 1.25
-            and stats["circularity"] >= 0.42
-            and stats["solidity"] >= 0.82
-            and 0.26 <= stats["extent"] <= 0.66
-            and 0 <= stats["defects"] <= 3
+            8 <= stats["area"] <= 220
+            and 0.70 <= stats["aspect"] <= 1.45
+            and stats["circularity"] >= 0.24
+            and stats["solidity"] >= 0.70
+            and 0.20 <= stats["extent"] <= 0.78
+            and 0 <= stats["defects"] <= 10
         ):
-            return False
+            return _rej("small_shape_gate")
 
         x, y0, bw, bh = cv2.boundingRect(cnt)
         pad = 2
@@ -217,18 +233,18 @@ def classify_enemy_dots(minimap_bgr):
         y1 = min(h, y0 + bh + pad)
         patch = hsv[y0:y1, x0:x1]
         if patch.size == 0:
-            return False
+            return _rej("empty_patch")
 
         val = patch[:, :, 2].astype(np.float32)
         sat = patch[:, :, 1].astype(np.float32)
-        if float(np.mean(sat)) > 55.0:
-            return False
-        if float(np.std(val)) < 15.0:
-            return False
+        if float(np.mean(sat)) > 68.0:
+            return _rej("sat_mean_high")
+        if float(np.std(val)) < 8.0:
+            return _rej("val_std_low")
 
         ph, pw = val.shape[:2]
         if ph < 5 or pw < 5:
-            return False
+            return _rej("patch_too_small")
 
         inner_y0 = ph // 4
         inner_y1 = ph - inner_y0
@@ -236,18 +252,18 @@ def classify_enemy_dots(minimap_bgr):
         inner_x1 = pw - inner_x0
         inner = val[inner_y0:inner_y1, inner_x0:inner_x1]
         if inner.size == 0:
-            return False
+            return _rej("inner_empty")
 
         border_mask = np.ones((ph, pw), dtype=bool)
         border_mask[inner_y0:inner_y1, inner_x0:inner_x1] = False
         border = val[border_mask]
         if border.size == 0:
-            return False
+            return _rej("border_empty")
 
         inner_mean = float(np.mean(inner))
         border_mean = float(np.mean(border))
-        if border_mean - inner_mean < 22.0:
-            return False
+        if border_mean - inner_mean < 10.0:
+            return _rej("border_inner_contrast_low")
 
         center_y0 = max(0, ph // 2 - 1)
         center_y1 = min(ph, ph // 2 + 2)
@@ -255,25 +271,25 @@ def classify_enemy_dots(minimap_bgr):
         center_x1 = min(pw, pw // 2 + 2)
         center = val[center_y0:center_y1, center_x0:center_x1]
         if center.size == 0:
-            return False
+            return _rej("center_empty")
         center_mean = float(np.mean(center))
-        if center_mean > 145.0:
-            return False
+        if center_mean > 180.0:
+            return _rej("center_too_bright")
 
         ring_mask = np.zeros((ph, pw), dtype=bool)
         ring_mask[max(0, ph // 2 - 3):min(ph, ph // 2 + 4), max(0, pw // 2 - 3):min(pw, pw // 2 + 4)] = True
         ring_mask[center_y0:center_y1, center_x0:center_x1] = False
         ring = val[ring_mask]
         if ring.size == 0:
-            return False
+            return _rej("ring_empty")
 
         bright_ring_ratio = float(np.count_nonzero(ring > 180)) / float(max(1, ring.size))
-        if bright_ring_ratio < 0.28:
-            return False
+        if bright_ring_ratio < 0.16:
+            return _rej("bright_ring_ratio_low")
 
         inner_dark_ratio = float(np.count_nonzero(inner < 115)) / float(max(1, inner.size))
-        if inner_dark_ratio < 0.22:
-            return False
+        if inner_dark_ratio < 0.12:
+            return _rej("inner_dark_ratio_low")
 
         return True
 
@@ -294,6 +310,22 @@ def classify_enemy_dots(minimap_bgr):
                 for i in range(1, n)]
 
     def _append_from_mask(mask, tier, kind, area_min, circularity_min):
+        def _maybe_save_skull_reject(cnt, reason, stats=None):
+            global _LAST_SKULL_REJECT_SNAPSHOT_T
+            if kind != "skull" or not SKULL_DEBUG_SAVE_REJECTED_CANDIDATES:
+                return
+            now_t = time.time()
+            if (now_t - _LAST_SKULL_REJECT_SNAPSHOT_T) < SKULL_DEBUG_REJECTED_COOLDOWN_SECONDS:
+                return
+            save_skull_reject_snapshot(
+                minimap_bgr,
+                cnt,
+                reason=reason,
+                stats=stats,
+                center=(cx0, cy0),
+            )
+            _LAST_SKULL_REJECT_SNAPSHOT_T = now_t
+
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             stats = _contour_shape_stats(cnt)
@@ -316,23 +348,32 @@ def classify_enemy_dots(minimap_bgr):
                     # Real skulls are compact, low-saturation blobs with a dark outline
                     # and bright core. Text fragments and HUD specks usually fail the
                     # local contrast check below.
-                    if not _looks_like_real_skull(cnt, stats, cx, cy):
+                    reject_reason = ["real_gate"]
+                    if not _looks_like_real_skull(cnt, stats, cx, cy, reject_reason=reject_reason):
+                        _maybe_save_skull_reject(cnt, reject_reason[0], stats=stats)
                         continue
                     # Town labels / player-adjacent UI often create white skull-like specks near center.
                     if ((cx - cx0) ** 2 + (cy - cy0) ** 2) ** 0.5 <= skull_exclusion_radius:
+                        _maybe_save_skull_reject(cnt, "center_exclusion", stats=stats)
                         continue
                 if _looks_like_white_companion(cnt, True):
+                    _maybe_save_skull_reject(cnt, "white_companion", stats=stats)
                     continue
                 if _looks_like_orange_companion(cnt, True):
+                    _maybe_save_skull_reject(cnt, "orange_companion", stats=stats)
                     continue
                 if not _is_enemy_like(stats, kind):
+                    _maybe_save_skull_reject(cnt, "enemy_shape_gate", stats=stats)
                     continue
                 _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
             else:
                 # Large merged blob: split via distance-transform peaks
                 bx, by, bw, bh = cv2.boundingRect(cnt)
-                if kind == "skull" and not _looks_like_large_skull_blob(cnt, stats):
-                    continue
+                if kind == "skull":
+                    reject_reason = ["large_blob_gate"]
+                    if not _looks_like_large_skull_blob(cnt, stats, reject_reason=reject_reason):
+                        _maybe_save_skull_reject(cnt, reject_reason[0], stats=stats)
+                        continue
                 for cx, cy in _peaks_in_blob(mask, bx, by, bw, bh):
                     _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
 
