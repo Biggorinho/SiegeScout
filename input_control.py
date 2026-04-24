@@ -67,9 +67,10 @@ def tap_key(key_name, hold_time=0.05):
 def tap_key_shifted(key_name, hold_time=0.05):
     keyboard.press('shift')
     keyboard.press(key_name)
-    sleep_interruptible(hold_time)
+    ok = sleep_interruptible(hold_time)
     keyboard.release(key_name)
     keyboard.release('shift')
+    return ok
 
 
 def tap_key_uninterruptible(key_name, hold_time=0.05):

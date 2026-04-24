@@ -165,6 +165,7 @@ def _detect_blue_node_centers(frame_bgr):
 
 
 def _estimate_map_offset_from_nodes(frame_bgr):
+    """Estimate map drag offset by matching detected blue nodes to fixed anchors."""
     detected = _detect_blue_node_centers(frame_bgr)
     if not detected:
         return 0, 0, 0
@@ -338,6 +339,12 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
 
 
 def _find_satanic_node(frame_bgr):
+    """Find the highlighted satanic zone node on the world map.
+
+    The map uses normal blue node markers that turn red when the satanic zone is
+    active. Score compact node-shaped contours by how red their center patch is,
+    rather than looking for a large red glow blob.
+    """
     if frame_bgr is None or frame_bgr.size == 0:
         return None
 
@@ -600,6 +607,11 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
 
 
 def _force_vote_reset_click_sequence(sct, full_mon, attempts):
+    """Last-resort vote reset click path when pause confirmation is unreliable.
+
+    This intentionally mirrors the old behavior: attempt click + interact even if
+    pause detector does not confirm the menu skin.
+    """
     print("[RST] force vote-reset click fallback")
     frame = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(frame):
@@ -650,7 +662,7 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
 
 
 def _ensure_pause_menu_open(sct, full_mon):
-    """Verbesserte Version: immer ESC drücken für sauberes Menü."""
+    """Ensure pause menu is visible. Maximum two ESC presses to avoid toggling."""
     frame = grab_frame_bgr(sct, full_mon)
 
     if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
@@ -683,6 +695,7 @@ def _ensure_pause_menu_open(sct, full_mon):
 
 
 def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
+    """Try selecting a node with multiple click offsets; return True if map closes."""
     for dx, dy in offsets:
         tx = int(max(0, min(SCREEN_W - 1, x + dx)))
         ty = int(max(0, min(SCREEN_H - 1, y + dy)))
@@ -694,6 +707,7 @@ def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
 
 
 def _reopen_world_map_for_recenter(sct, full_mon):
+    """Close and reopen world map once to recenter map position."""
     print("[SAT] recenter: closing and reopening world map")
     current = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(current):
@@ -759,6 +773,11 @@ def run_vote_reset_sequence(sct, full_mon):
 
 
 def pick_zone_from_open_map(sct, full_mon, frame=None):
+    """Find and click the satanic node (or fallback) on an already-open world map.
+
+    `frame` is an optional pre-captured BGR image of the open map; if None a
+    fresh frame is grabbed.  Returns True when the map closes (zone selected).
+    """
     if frame is None:
         frame = grab_frame_bgr(sct, full_mon)
 
@@ -816,6 +835,7 @@ def perform_corner_escape_burst(
     preferred_dx=None, preferred_dy=None,
     minimap_bgr=None, center=None,
 ):
+    """Try short burst pattern, preferring recent enemy direction and walkable lanes."""
     def _valid(dx, dy):
         return dx is not None and dy is not None and (abs(dx) + abs(dy)) > 0
 
