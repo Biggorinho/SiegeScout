@@ -40,7 +40,7 @@ def build():
     ]
     print(f"[build] running Nuitka — this takes a few minutes on first run")
     subprocess.run(cmd, check=True)
-    print(f"[build] done → {DIST_DIR / 'SiegeScout.exe'}")
+    print(f"[build] done -> {DIST_DIR / 'SiegeScout.exe'}")
 
 
 if __name__ == "__main__":
