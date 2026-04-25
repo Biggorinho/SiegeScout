@@ -215,7 +215,7 @@ class BotUI(tk.Tk):
         self.report_callback_exception = self._on_tk_exception
         self.after(80, self._poll_log)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.geometry("460x660")
+        self.geometry("460x870")
         self.after(50, self._init_license)
 
     def _build_ui(self):
@@ -249,8 +249,17 @@ class BotUI(tk.Tk):
         self._status_lbl = tk.Label(status, text="Idle", bg=BG, fg=FG_MUTE, font=self.f_ui_bold)
         self._status_lbl.pack(side=tk.LEFT)
 
+        # ── setup notice ─────────────────────────────────────────────────────
+        notice = tk.Frame(root, bg="#192519", padx=12, pady=7,
+                          highlightbackground="#2d4d2d", highlightthickness=1)
+        notice.pack(fill=tk.X, pady=(12, 0))
+        tk.Label(notice, text="Play in 1920×1080 Windowed Fullscreen",
+                 bg="#192519", fg="#72aa72", font=("Consolas", 8)).pack(anchor=tk.W)
+        tk.Label(notice, text="Start the bot from the Zone Selection screen",
+                 bg="#192519", fg="#72aa72", font=("Consolas", 8)).pack(anchor=tk.W)
+
         cta_row = tk.Frame(root, bg=BG)
-        cta_row.pack(fill=tk.X, pady=(14, 0))
+        cta_row.pack(fill=tk.X, pady=(12, 0))
 
         self._cta_container = tk.Frame(cta_row, bg=BG)
         self._cta_container.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -294,8 +303,54 @@ class BotUI(tk.Tk):
         self._mining_sw = _row(opt, "Enable Mining", False, enabled=False, soon=True)
         self._loot_sw = _row(opt, "Enable Loot Items", False, enabled=False, soon=True)
 
+        tk.Frame(opt, bg=BORDER, height=1).pack(fill=tk.X, pady=(8, 4))
+
+        zone_row = tk.Frame(opt, bg=SURFACE)
+        zone_row.pack(fill=tk.X, pady=3)
+        tk.Label(zone_row, text="Target Zone", bg=SURFACE, fg=FG, font=self.f_ui).pack(side=tk.LEFT)
+
+        _zone_names = ["Satanic (auto)"] + sorted(config.SATANIC_FIXED_NODES.keys())
+        self._zone_var = tk.StringVar(value="Satanic (auto)")
+        zone_menu = tk.OptionMenu(zone_row, self._zone_var, *_zone_names)
+        zone_menu.config(
+            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
+            relief=tk.FLAT, bd=0, font=self.f_ui, highlightthickness=0,
+            width=22, anchor="e",
+        )
+        zone_menu["menu"].config(
+            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
+            font=self.f_ui, relief=tk.FLAT, bd=0,
+        )
+        zone_menu.pack(side=tk.RIGHT)
+
+        # ── skill bindings ────────────────────────────────────────────────────
+        sk = tk.Frame(root, bg=SURFACE, padx=14, pady=10,
+                      highlightbackground=BORDER, highlightthickness=1)
+        sk.pack(fill=tk.X, pady=(10, 0))
+        tk.Label(sk, text="SKILL BINDINGS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W, pady=(0, 6))
+
+        def _skill_row(parent, label, key_hint, default_enabled, default_cd):
+            row = tk.Frame(parent, bg=SURFACE)
+            row.pack(fill=tk.X, pady=2)
+            sw = Switch(row, initial=default_enabled)
+            sw.pack(side=tk.LEFT)
+            tk.Label(row, text=label, bg=SURFACE, fg=FG, font=self.f_ui).pack(side=tk.LEFT, padx=(8, 0))
+            tk.Label(row, text=f" {key_hint} ", bg="#1e2e1e", fg=GREEN,
+                     font=self.f_cap, padx=3).pack(side=tk.LEFT, padx=(6, 0))
+            cd_var = tk.StringVar(value=str(default_cd))
+            cd_entry = tk.Entry(row, textvariable=cd_var, width=5,
+                                bg="#2a2e2a", fg=FG, insertbackground=FG,
+                                relief=tk.FLAT, bd=2, font=self.f_ui, justify=tk.CENTER)
+            cd_entry.pack(side=tk.RIGHT)
+            tk.Label(row, text="s   CD:", bg=SURFACE, fg=FG_MUTE, font=self.f_ui).pack(side=tk.RIGHT, padx=(0, 2))
+            return sw, cd_var
+
+        self._rc_sw,  self._rc_cd  = _skill_row(sk, "Buff / Shield",    "KEY E", True, 10.0)
+        self._k3_sw,  self._k3_cd  = _skill_row(sk, "Flasks",           "KEY 3", True, 50.0)
+        self._mv_sw,  self._mv_cd  = _skill_row(sk, "Movement Ability", "KEY R", True,  3.0)
+
         log_card = tk.Frame(root, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
-        log_card.pack(fill=tk.BOTH, expand=True, pady=(14, 0))
+        log_card.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
 
         log_head = tk.Frame(log_card, bg=SURFACE)
         log_head.pack(fill=tk.X, padx=12, pady=(10, 8))
@@ -435,11 +490,25 @@ class BotUI(tk.Tk):
         sys.stdout = _QueueWriter(self._log_queue)
         sys.stderr = _QueueWriter(self._log_queue)
 
+        def _cd(sv, default):
+            try:
+                return max(0.1, float(sv.get()))
+            except (ValueError, tk.TclError):
+                return default
+
+        _zone_sel = self._zone_var.get()
         kwargs = {
             "stop_event": self._stop_event,
             "enable_death_handling": self._death_sw.get(),
             "enable_mining": self._mining_sw.get(),
             "enable_loot_items": self._loot_sw.get(),
+            "target_zone": None if _zone_sel == "Satanic (auto)" else _zone_sel,
+            "enable_rightclick_skill":   self._rc_sw.get(),
+            "rightclick_cooldown":       _cd(self._rc_cd, 10.0),
+            "enable_key3_skill":         self._k3_sw.get(),
+            "key3_cooldown":             _cd(self._k3_cd, 50.0),
+            "enable_movement_ability":   self._mv_sw.get(),
+            "movement_ability_cooldown": _cd(self._mv_cd, 3.0),
         }
         try:
             sig = inspect.signature(_main.run)

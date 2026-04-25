@@ -3,14 +3,13 @@ import ctypes.wintypes
 import cv2
 import mss
 import numpy as np
-import os
 import random
 import time
 import math
 import keyboard
 
 from config import (
-    SCREEN_W, SCREEN_H, DEBUG_DIR,
+    SCREEN_W, SCREEN_H,
     HP_FLEE_THRESHOLD, HP_RESUME_THRESHOLD,
     HP_ZERO_DEAD_THRESHOLD, HP_ZERO_RESPAWN_COOLDOWN_SECONDS,
     HP_BAR_MISSING_GRACE_SECONDS,
@@ -32,7 +31,6 @@ from config import (
     POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS,
     STUCK_LOG_COOLDOWN, STUCK_COUNT_EVENT_COOLDOWN_SECONDS,
     STUCK_VOTE_RESET_CONSECUTIVE, HARD_STUCK_RESET_SECONDS,
-    HARD_STUCK_SNAPSHOT_COOLDOWN_SECONDS,
     CORNER_ESCAPE_COOLDOWN_SECONDS, CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET,
     VOTE_RESET_COOLDOWN_SECONDS, VOTE_RESET_FAIL_COOLDOWN_SECONDS, VOTE_RESET_ENEMY_GRACE_SECONDS,
     VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT, VOTE_RESET_FAIL_LOCKOUT_SECONDS,
@@ -44,9 +42,6 @@ from config import (
     ENEMY_CONFIRM_FRAMES, ENEMY_LOST_FRAMES,
     LAST_SEEN_MONSTER_MEMORY_SECONDS,
     COMPANION_TRACK_RADIUS,
-    RESET_DIAG_PRINT_INTERVAL_SECONDS,
-    SKULL_DEBUG_SNAPSHOT_COOLDOWN_SECONDS,
-    SKULL_DEBUG_PROBE_COOLDOWN_SECONDS,
     ATTACK_IDLE_VOTE_RESET_SECONDS,
     ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS,
     MINING_SCAN_INTERVAL_SECONDS,
@@ -65,8 +60,8 @@ from config import (
 from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible,
-    classify_ore_dots, find_ore_nodes_on_screen, detect_mining_qte_window,
-    classify_item_dots, find_item_tags_on_screen,
+    find_ore_nodes_on_screen, detect_mining_qte_window,
+    find_item_tags_on_screen,
 )
 from minimap import (
     get_minimap_region, minimap_center_from_image,
@@ -83,7 +78,7 @@ from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
     attack_key_down, attack_key_up,
-    cast_right_click_skill, cast_key3_skill_safe,
+    cast_key_skill_safe, cast_key3_skill_safe, cast_movement_ability,
     spin_to_clear_melee,
     tap_key, release_all_inputs,
     left_click_at,
@@ -95,14 +90,27 @@ from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map,
 )
-from debug_utils import save_hard_stuck_snapshot, save_minimap_frame, save_skull_detection_snapshot, save_skull_mask_probe
 
 
-def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_loot_items=None, on_vote_reset=None):
+def run(
+    stop_event=None, enable_death_handling=None, enable_mining=None, enable_loot_items=None,
+    on_vote_reset=None, target_zone=None,
+    enable_rightclick_skill=None, rightclick_cooldown=None,
+    enable_key3_skill=None, key3_cooldown=None,
+    enable_movement_ability=None, movement_ability_cooldown=None,
+):
     import config as _cfg
-    _enable_death_handling = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
-    _enable_mining         = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
-    _enable_loot_items     = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
+    _enable_death_handling   = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
+    _enable_mining           = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
+    _enable_loot_items       = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
+    _enable_buff_shield  = _cfg.ENABLE_BUFF_SHIELD_SKILL if enable_rightclick_skill is None else enable_rightclick_skill
+    _buff_shield_key     = _cfg.BUFF_SHIELD_KEY
+    _buff_shield_cd      = ATTACK_RIGHTCLICK_INTERVAL_SECONDS if rightclick_cooldown is None else rightclick_cooldown
+    _enable_key3_skill       = _cfg.ENABLE_KEY3_SKILL if enable_key3_skill is None else enable_key3_skill
+    _key3_cooldown           = ATTACK_KEY3_INTERVAL_SECONDS if key3_cooldown is None else key3_cooldown
+    _enable_movement_ability = _cfg.ENABLE_MOVEMENT_ABILITY if enable_movement_ability is None else enable_movement_ability
+    _movement_ability_key    = _cfg.MOVEMENT_ABILITY_KEY
+    _movement_ability_cd     = _cfg.MOVEMENT_ABILITY_COOLDOWN_SECONDS if movement_ability_cooldown is None else movement_ability_cooldown
 
     print("Bot started | q=Stop | p=Pause | esc=Emergency stop")
     print("Game window must be visible (no background capture with mss)")
@@ -150,8 +158,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
     cached_mask                  = None
     companion                    = CompanionSuppressor()
     minimap_mode                 = "small"
-    debug_mode                   = False
-    debug_frame_idx              = 0
     last_attack_activity_t       = time.time()
     zone_had_attack              = False
     last_vote_reset_t            = 0.0
@@ -164,9 +170,10 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
     last_hp_recovery_t           = 0.0
     last_attack_key_refresh_t    = 0.0
     last_known_hp                = None
-    next_attack_rightclick_t     = time.time() + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
-    next_attack_key3_t           = time.time() + ATTACK_KEY3_INTERVAL_SECONDS
+    next_attack_rightclick_t     = time.time() + _buff_shield_cd
+    next_attack_key3_t           = time.time() + _key3_cooldown
     last_attack_sweep_t          = time.time()
+    last_movement_ability_t      = 0.0
     hp_zero_since                = 0.0
     hp_bar_missing_until         = 0.0
     stuck_no_enemy_count         = 0
@@ -177,16 +184,12 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
     hard_stuck_since             = 0.0
     corner_escape_attempts       = 0
     last_corner_escape_t         = 0.0
-    last_hard_stuck_snapshot_t   = 0.0
     last_seen_enemy_dot          = None
     last_seen_enemy_vec          = None
     last_seen_enemy_t            = 0.0
     last_any_enemy_seen_t        = 0.0
     _log_enemy_count             = -1
     _log_chase_t                 = 0.0
-    last_reset_diag_t            = 0.0
-    last_skull_debug_snapshot_t  = 0.0
-    last_skull_probe_snapshot_t  = 0.0
     zone_started_t               = time.time()
     last_death_respawn_t         = 0.0
     death_screen_frames          = 0
@@ -281,8 +284,8 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
         state_start                    = now_loop
         hard_stuck_since               = 0.0
         escape_committed_until         = 0.0
-        next_attack_rightclick_t       = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
-        next_attack_key3_t             = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
+        next_attack_rightclick_t       = now_loop + _buff_shield_cd
+        next_attack_key3_t             = now_loop + _key3_cooldown
         last_attack_sweep_t            = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
         last_attack_move_plan_t        = 0.0
         attack_move_dx, attack_move_dy  = adx, ady
@@ -324,13 +327,15 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
             # Set immediately to prevent same-tick retriggers while reset is running.
             last_vote_reset_t = attempt_t
             auto_esc_ignore_until = attempt_t + 1.0
-            ok = run_vote_reset_sequence(sct, full_mon)
+            ok = run_vote_reset_sequence(sct, full_mon, target_zone=target_zone)
             if ok:
                 vote_reset_fail_streak = 0
                 vote_reset_lockout_until = 0.0
-                if on_vote_reset:                  # ← add
-                    try: on_vote_reset()           # ← add
-                    except Exception: pass
+                if on_vote_reset:
+                    try:
+                        on_vote_reset()
+                    except Exception:
+                        pass
                 _do_zone_reset()
             else:
                 vote_reset_fail_streak += 1
@@ -355,11 +360,13 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
         # ── startup: pick satanic zone from the world map ─────────────────────
         startup_frame = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
         if is_world_map_visible(startup_frame):
-            print("[STARTUP] Map already open – selecting satanic zone ...")
-            if pick_zone_from_open_map(sct, full_mon, startup_frame):
+            _zone_label = f"zone: {target_zone}" if target_zone else "satanic zone"
+            print(f"[STARTUP] Map already open – selecting {_zone_label} ...")
+            if pick_zone_from_open_map(sct, full_mon, startup_frame, target_zone=target_zone):
                 _do_zone_reset()
         else:
-            print("[STARTUP] Opening map and selecting satanic zone ...")
+            _zone_label = f"zone: {target_zone}" if target_zone else "satanic zone"
+            print(f"[STARTUP] Opening map and selecting {_zone_label} ...")
             _attempt_vote_reset(with_spin=False)
 
         while True:
@@ -389,13 +396,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     attack_held = False
                 print("PAUSE" if paused else "RESUME")
                 time.sleep(0.5)
-                continue
-            if keyboard.is_pressed('f7'):
-                debug_mode = not debug_mode
-                print(f"DEBUG {'ON' if debug_mode else 'OFF'} | frames -> {DEBUG_DIR}/")
-                if debug_mode:
-                    os.makedirs(DEBUG_DIR, exist_ok=True)
-                time.sleep(0.35)
                 continue
             if paused:
                 time.sleep(0.1)
@@ -444,7 +444,7 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                         tap_key('esc', hold_time=0.10)
                         sleep_interruptible(0.40)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if run_vote_reset_sequence(sct, full_mon):
+                    if run_vote_reset_sequence(sct, full_mon, target_zone=target_zone):
                         _do_zone_reset()
                     death_screen_frames = 0
                     continue
@@ -494,15 +494,15 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                 if opening_target is not None:
                     angle = math.atan2(opening_target[1] - opening_center[1], opening_target[0] - opening_center[0])
                     recent_explore_angles.append(angle)
-                    recent_explore_angles = recent_explore_angles[-12:]
+                    recent_explore_angles = recent_explore_angles[-8:]
                     sector_tracker.update(angle)
                     last_explore_target = opening_target
 
                 # Skip scripted opening spin/buff: start with normal explore pathing.
                 zone_opening_rightclick_pending   = False
                 zone_opening_key3_taps_remaining  = 0
-                next_attack_rightclick_t          = time.time() + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
-                next_attack_key3_t                = time.time() + ATTACK_KEY3_INTERVAL_SECONDS
+                next_attack_rightclick_t          = time.time() + _buff_shield_cd
+                next_attack_key3_t                = time.time() + _key3_cooldown
                 continue
 
             # ── capture minimap ───────────────────────────────────────────────
@@ -536,7 +536,7 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     attempt_respawn(sct, full_mon)
                     sleep_interruptible(RESPAWN_TO_RESET_DELAY_SECONDS)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if run_vote_reset_sequence(sct, full_mon):
+                    if run_vote_reset_sequence(sct, full_mon, target_zone=target_zone):
                         _do_zone_reset()
                 sleep_interruptible(0.08)
                 continue
@@ -578,26 +578,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
             enemy_dots = classify_enemy_dots(minimap)
             dots       = [(x, y) for x, y, _, _ in enemy_dots]
             center = minimap_center_from_image(minimap)
-
-            skull_count = sum(1 for _, _, _, kind in enemy_dots if kind == "skull")
-            if skull_count > 0 and (now_loop - last_skull_debug_snapshot_t) >= SKULL_DEBUG_SNAPSHOT_COOLDOWN_SECONDS:
-                save_skull_detection_snapshot(
-                    minimap,
-                    enemy_dots,
-                    center,
-                    state_label=state.value,
-                    zone_age_s=max(0, now_loop - zone_started_t),
-                )
-                last_skull_debug_snapshot_t = now_loop
-                print(f"[DBG-SKULL] snapshot saved ({skull_count} skull dots)")
-            elif debug_mode and skull_count == 0 and (now_loop - last_skull_probe_snapshot_t) >= SKULL_DEBUG_PROBE_COOLDOWN_SECONDS:
-                save_skull_mask_probe(
-                    minimap,
-                    center=center,
-                    state_label=state.value,
-                    zone_age_s=max(0, now_loop - zone_started_t),
-                )
-                last_skull_probe_snapshot_t = now_loop
 
             terrain_memory.update(minimap)
 
@@ -719,29 +699,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
             hard_stuck_age     = (now_loop - hard_stuck_since) if hard_stuck_since > 0.0 else 0.0
             hard_stuck_trigger = hard_stuck_since > 0.0 and hard_stuck_age >= HARD_STUCK_RESET_SECONDS
 
-            if hard_stuck_trigger and \
-                    (now_loop - last_hard_stuck_snapshot_t) >= HARD_STUCK_SNAPSHOT_COOLDOWN_SECONDS:
-                save_hard_stuck_snapshot(frame, minimap, nearest, center, hard_stuck_age)
-                last_hard_stuck_snapshot_t = now_loop
-
-            if debug_mode and (now_loop - last_reset_diag_t) >= RESET_DIAG_PRINT_INTERVAL_SECONDS:
-                cooldown_ready = (now_loop - last_vote_reset_t) >= VOTE_RESET_COOLDOWN_SECONDS
-                lockout_active = now_loop < vote_reset_lockout_until
-                print(
-                    "[RST-DIAG] "
-                    f"state={state.value} nearest={nearest is not None} conf={confirmed_enemy_now} "
-                    f"hp={hp:.2f}/{VOTE_RESET_MIN_HP:.2f} "
-                    f"zone_age={now_loop - zone_started_t:.1f}s/{ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS:.1f}s "
-                    f"no_enemy_frames={no_enemy_frames}/{NO_ENEMY_RESET_MIN_FRAMES} "
-                    f"enemy_age={now_loop - last_enemy_seen_t:.2f}s/{VOTE_RESET_ENEMY_GRACE_SECONDS:.2f}s "
-                    f"hard_stuck={hard_stuck_age:.1f}s/{HARD_STUCK_RESET_SECONDS:.1f}s "
-                    f"cooldown={'ok' if cooldown_ready else 'wait'} "
-                    f"lockout={'on' if lockout_active else 'off'} "
-                    f"fail_streak={vote_reset_fail_streak} "
-                    f"stuck_chain={stuck_no_enemy_count}/{STUCK_VOTE_RESET_CONSECUTIVE}"
-                )
-                last_reset_diag_t = now_loop
-
             # ── vote-reset triggers ───────────────────────────────────────────
             cooldown_ok = (
                 now_loop >= vote_reset_lockout_until
@@ -818,26 +775,11 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                 _attempt_vote_reset(with_spin=True)
                 continue
 
-            # ── debug frame save ──────────────────────────────────────────────
-            if debug_mode:
-                companion_dot = companion._candidate \
-                    if companion._hits >= companion.confirm_frames else None
-                blocked_mask_dbg = terrain_memory.debug_blocked_mask(binary=True)
-                save_minimap_frame(minimap, dots, companion_dot,
-                                   filtered_dots, nearest, center, debug_frame_idx,
-                                   state=state.value, walkable_mask=cached_mask,
-                                   explore_target=last_explore_target,
-                                   terrain_blocked_mask=blocked_mask_dbg)
-                debug_frame_idx += 1
-                if debug_frame_idx % 10 == 0:
-                    print(f"[DBG] frame={debug_frame_idx} raw={len(dots)} "
-                          f"filtered={len(filtered_dots)} nearest={nearest} state={state.value}")
-
             # ── right-click shield refresh ────────────────────────────────────
-            if now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
-                attack_held              = cast_right_click_skill(attack_held, resume_left=True)
+            if _enable_buff_shield and now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
+                attack_held              = cast_key_skill_safe(_buff_shield_key, attack_held, resume_left=True)
                 rightclick_busy_until    = time.time() + 0.35
-                next_attack_rightclick_t = now_loop + ATTACK_RIGHTCLICK_INTERVAL_SECONDS
+                next_attack_rightclick_t = now_loop + _buff_shield_cd
 
             # ── enemy triggers ATTACK state ───────────────────────────────────
             if state != State.FLEE and confirmed_enemy_now and nearest:
@@ -890,15 +832,8 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                         or mining_target_screen is None
                     )
                     ores_on_screen = []
-                    ore_mm_target = None
                     if mining_should_scan:
                         ores_on_screen = find_ore_nodes_on_screen(frame)
-                        ore_mm = classify_ore_dots(minimap)
-                        if ore_mm:
-                            ore_mm_target = max(
-                                ore_mm,
-                                key=lambda entry: (entry[2], -dot_distance((entry[0], entry[1]), center)),
-                            )
                         last_mining_scan_t = now_loop
 
                     if ores_on_screen:
@@ -931,9 +866,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                             tap_key('f', hold_time=0.04)
                             last_mining_interact_t = now_loop
 
-                        if ore_mm_target is not None and debug_mode:
-                            print(f"[MINE] screen target=({tx},{ty}) minimap_hint=({ore_mm_target[0]},{ore_mm_target[1]})")
-
                         sleep_interruptible(0.04)
                         continue
 
@@ -942,7 +874,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                 # ── LOOT ITEMS (new): star-marker hint + on-screen tag click ───────────
                 if _enable_loot_items and resource_collect_allowed and not confirmed_enemy_now:
                     if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
-                        item_mm = classify_item_dots(minimap)
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
 
@@ -955,9 +886,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                             if (now_loop - last_loot_items_click_t) >= LOOT_ITEMS_CLICK_INTERVAL_SECONDS:
                                 left_click_at(int(tx), int(ty), hold_time=0.05)
                                 last_loot_items_click_t = now_loop
-                            if debug_mode and item_mm:
-                                hint = item_mm[0]
-                                print(f"[LOOT] click=({int(tx)},{int(ty)}) minimap_star_hint=({hint[0]},{hint[1]})")
                             sleep_interruptible(0.03)
                             continue
 
@@ -996,9 +924,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     if (now_loop - last_terrain_block_mark_t) >= TERRAIN_BLOCKED_MARK_COOLDOWN_SECONDS:
                         terrain_memory.mark_blocked(center, explore_dx, explore_dy)
                         last_terrain_block_mark_t = now_loop
-                        if debug_mode:
-                            blocked_px = terrain_memory.blocked_pixel_count()
-                            print(f"[TERRAIN] mark blocked explore dir=({explore_dx},{explore_dy}) blocked_px={blocked_px}")
                     if now_loop >= rightclick_busy_until:
                         jumped, jump_dir = maybe_jump_stuck_sequence(
                             explore_dx, explore_dy,
@@ -1051,7 +976,7 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                         print(f"[PATH] replan {_method} -> {_ang_deg:.0f}° target=({target[0]},{target[1]})")
                         angle = math.atan2(target[1] - center[1], target[0] - center[0])
                         recent_explore_angles.append(angle)
-                        recent_explore_angles = recent_explore_angles[-12:]
+                        recent_explore_angles = recent_explore_angles[-8:]
                         sector_tracker.update(angle)
                         last_explore_target = target
                     last_explore_plan_t = time.time()
@@ -1081,12 +1006,17 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                         if target is not None:
                             angle = math.atan2(target[1] - center[1], target[0] - center[0])
                             recent_explore_angles.append(angle)
-                            recent_explore_angles = recent_explore_angles[-12:]
+                            recent_explore_angles = recent_explore_angles[-8:]
                             sector_tracker.update(angle)
                             last_explore_target = target
                         last_explore_plan_t = time.time()
 
                 explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
+                if _enable_movement_ability and \
+                        (now_loop - last_movement_ability_t) >= _movement_ability_cd and \
+                        now_loop >= rightclick_busy_until:
+                    cast_movement_ability(explore_dx, explore_dy, key=_movement_ability_key)
+                    last_movement_ability_t = now_loop
                 sleep_interruptible(random.uniform(EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS))
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t)
@@ -1109,11 +1039,9 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     )
                     last_attack_sweep_t = time.time()
 
-                if now_loop >= next_attack_key3_t:
+                if _enable_key3_skill and now_loop >= next_attack_key3_t:
                     attack_held        = cast_key3_skill_safe(attack_held, resume_left=True)
-                    next_attack_key3_t = now_loop + ATTACK_KEY3_INTERVAL_SECONDS
-                    if debug_mode:
-                        print("[CAST] key 3")
+                    next_attack_key3_t = now_loop + _key3_cooldown
 
                 attack_stuck.update(center[0], center[1])
                 attack_intent_stuck.update(minimap, attack_move_dx, attack_move_dy)
@@ -1138,9 +1066,6 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     if (now_loop - last_terrain_block_mark_t) >= TERRAIN_BLOCKED_MARK_COOLDOWN_SECONDS:
                         terrain_memory.mark_blocked(center, attack_move_dx, attack_move_dy)
                         last_terrain_block_mark_t = now_loop
-                        if debug_mode:
-                            blocked_px = terrain_memory.blocked_pixel_count()
-                            print(f"[TERRAIN] mark blocked attack dir=({attack_move_dx},{attack_move_dy}) blocked_px={blocked_px}")
                     if now_loop >= rightclick_busy_until:
                         pref_dx = adx if confirmed_enemy_now else attack_move_dx
                         pref_dy = ady if confirmed_enemy_now else attack_move_dy
@@ -1241,6 +1166,13 @@ def run(stop_event=None, enable_death_handling=None, enable_mining=None, enable_
                     duration=random.uniform(0.95, 1.45),
                     aim_dx=adx, aim_dy=ady,
                 )
+                if _enable_movement_ability and \
+                        (now_loop - last_movement_ability_t) >= _movement_ability_cd and \
+                        now_loop >= rightclick_busy_until:
+                    cast_movement_ability(adx if confirmed_enemy_now else attack_move_dx,
+                                          ady if confirmed_enemy_now else attack_move_dy,
+                                          key=_movement_ability_key)
+                    last_movement_ability_t = now_loop
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(attack_move_dx, attack_move_dy, last_jump_t)
 

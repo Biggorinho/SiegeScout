@@ -200,6 +200,14 @@ def cast_key_skill_safe(key_name, attack_held, resume_left=False, hold_time=0.06
     return attack_held
 
 
+def cast_movement_ability(move_dx, move_dy, key='e'):
+    """Aim cursor toward movement direction and press the movement ability key."""
+    if _aim_cursor_toward_vector(move_dx, move_dy, distance=JUMP_AIM_DISTANCE):
+        tap_key(key, hold_time=0.06)
+        return True
+    return False
+
+
 def cast_key3_skill_safe(attack_held, resume_left=False):
     """Cast key 3 reliably: release attack, double tap, then resume attack."""
     if attack_held:

@@ -143,6 +143,12 @@ class ExploreHeatMap:
         elif self._last_shape is None or minimap_shape == self._last_shape:
             cell = (center[0] // self.cell_size, center[1] // self.cell_size)
             self._visits[cell] = min(self._max_visits, self._visits.get(cell, 0) + 1)
+            # Spread a lighter penalty to immediately adjacent cells for broader coverage
+            for dcx, dcy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                adj = (cell[0] + dcx, cell[1] + dcy)
+                prev = self._visits.get(adj, 0)
+                if prev < self._max_visits // 2:
+                    self._visits[adj] = prev + 1
             self._updates += 1
             if self._updates % self._decay_every_updates == 0:
                 self._decay()
@@ -248,8 +254,12 @@ class TerrainMemory:
             ty = int(max(0, min(h - 1, ty)))
 
         patch = np.zeros((h, w), dtype=np.uint8)
-        cv2.line(patch, (cx, cy), (tx, ty), max(8, TERRAIN_BLOCKED_MARK_STRENGTH // 3), 2)
+        # Thick line toward the wall
+        cv2.line(patch, (cx, cy), (tx, ty), max(12, TERRAIN_BLOCKED_MARK_STRENGTH // 2), 3)
+        # Primary block circle ahead
         cv2.circle(patch, (tx, ty), TERRAIN_BLOCKED_PATCH_RADIUS, TERRAIN_BLOCKED_MARK_STRENGTH, -1)
+        # Smaller secondary circle at current position so the standing point is also penalised
+        cv2.circle(patch, (cx, cy), TERRAIN_BLOCKED_PATCH_RADIUS // 2, TERRAIN_BLOCKED_MARK_STRENGTH // 3, -1)
         self._known_blocked = cv2.add(self._known_blocked, patch)
 
     def apply(self, mask):

@@ -202,13 +202,14 @@ def adaptive_walkable_mask(minimap_bgr, center, target=None):
     return last_mask
 
 
-def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, samples=14,
+def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=32, samples=14,
                         recent_angles=None):
-    """Test 8 compass directions; return screen-space delta for the most walkable one.
+    """Test 16 directions (22.5° steps); return screen-space delta for the most walkable one.
 
-    Excludes directions within 45° of current_dx/dy (the direction that failed).
-    Penalises directions that are the reverse of recent explore angles so the
-    bot does not escape by walking back toward spawn.
+    Excludes directions within 30° of current_dx/dy (the direction that failed).
+    Scores each direction by blending a near probe and a far probe so open corridors
+    are preferred over directions that clear the wall but immediately hit another.
+    Penalises directions that are the reverse of recent explore angles.
     """
     if mask is None:
         return random_explore_delta()
@@ -222,16 +223,23 @@ def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, sam
     h, w = mask.shape[:2]
     best_angle, best_score = None, -1.0
 
-    for i in range(8):
-        angle = i * math.pi / 4
+    for i in range(16):
+        angle = i * math.pi / 8
         if current_angle is not None:
             diff = abs((angle - current_angle + math.pi) % (2 * math.pi) - math.pi)
-            if diff <= math.pi / 4:
+            if diff <= math.pi / 6:  # 30° exclusion — less aggressive than 45°
                 continue
         tx = int(max(0, min(w - 1, center[0] + math.cos(angle) * probe_dist)))
         ty = int(max(0, min(h - 1, center[1] + math.sin(angle) * probe_dist)))
-        score = ray_walkability_score(mask, center, (tx, ty), samples=samples)
-        # Penalise directions that are the reverse of recent travel
+        near_score = ray_walkability_score(mask, center, (tx, ty), samples=samples)
+
+        # Far probe rewards directions with genuinely open space beyond the near wall
+        far_tx = int(max(0, min(w - 1, center[0] + math.cos(angle) * probe_dist * 1.9)))
+        far_ty = int(max(0, min(h - 1, center[1] + math.sin(angle) * probe_dist * 1.9)))
+        far_score = ray_walkability_score(mask, center, (far_tx, far_ty), samples=10)
+
+        score = near_score * 0.65 + far_score * 0.35
+
         if recent_angles:
             min_rev_diff = min(
                 abs((angle - (a + math.pi) + math.pi) % (2 * math.pi) - math.pi)
@@ -242,10 +250,10 @@ def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=28, sam
             best_score = score
             best_angle = angle
 
-    if best_angle is None or best_score < 0.3:
+    if best_angle is None or best_score < 0.25:
         return random_explore_delta()
 
-    dist = random.randint(95, 180)
+    dist = random.randint(100, 200)
     return int(math.cos(best_angle) * dist), int(math.sin(best_angle) * dist)
 
 
@@ -281,7 +289,7 @@ def scale_vector(dx, dy, min_len=95, max_len=220):
     return int(dx * factor), int(dy * factor)
 
 
-def steer_delta_away_from_walls(mask, center, move_dx, move_dy, probe_dist=26):
+def steer_delta_away_from_walls(mask, center, move_dx, move_dy, probe_dist=30):
     """Steer a movement vector toward nearby safer lanes when forward is wall-heavy."""
     if mask is None or mask.size == 0:
         return move_dx, move_dy
@@ -292,7 +300,8 @@ def steer_delta_away_from_walls(mask, center, move_dx, move_dy, probe_dist=26):
 
     base_angle = math.atan2(move_dy, move_dx)
     h, w = mask.shape[:2]
-    offsets = [0.0, math.radians(18), -math.radians(18), math.radians(35), -math.radians(35), math.radians(55), -math.radians(55)]
+    offsets = [0.0, math.radians(18), -math.radians(18), math.radians(35), -math.radians(35),
+               math.radians(55), -math.radians(55), math.radians(72), -math.radians(72)]
 
     best_angle = base_angle
     best_score = -1.0
@@ -329,7 +338,14 @@ def steer_delta_away_from_walls(mask, center, move_dx, move_dy, probe_dist=26):
 
 
 def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=None, heatmap=None, terrain_memory=None, sector_tracker=None):
-    """Pick an exploration target from bright/open minimap regions."""
+    """Pick an exploration target from bright/open minimap regions, prioritising frontier cells.
+
+    Two-phase approach:
+      Phase 1 – contour-based sampling: tests edges of the walkable+fog mask.
+      Phase 2 – frontier sampling: directly tests walkable cells adjacent to unexplored
+                 fog so the bot can target the explored/unknown boundary even when no
+                 contour point samples it.
+    """
     if minimap_bgr is None or minimap_bgr.size == 0:
         return None
 
@@ -341,77 +357,100 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
     hsv         = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
     unknown_fog = cv2.inRange(hsv, np.array([78, 80, 55]), np.array([110, 255, 255]))
 
+    # Frontier mask: walkable pixels immediately adjacent to unexplored fog.
+    # These are the highest-value exploration targets — one step from new territory.
+    frontier_mask = None
+    if np.any(unknown_fog):
+        fog_dilated   = cv2.dilate(unknown_fog, np.ones((9, 9), dtype=np.uint8), iterations=2)
+        frontier_mask = cv2.bitwise_and(walkable, fog_dilated)
+
     cx, cy = center
-    cv2.circle(walkable, (cx, cy), PLAYER_EXCLUSION_RADIUS + 4, 0, -1)
-
-    contours, _ = cv2.findContours(walkable, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not contours:
-        return None
-
     h, w = walkable.shape[:2]
     clearance_map = cv2.distanceTransform((walkable > 0).astype(np.uint8), cv2.DIST_L2, 3)
 
+    # Exclude the player's immediate vicinity from targeting
+    walkable_cnt = walkable.copy()
+    cv2.circle(walkable_cnt, (cx, cy), PLAYER_EXCLUSION_RADIUS + 4, 0, -1)
+
     best_dot, best_score = None, -1.0
 
+    def _eval(tx, ty):
+        nonlocal best_dot, best_score
+        dist = math.hypot(tx - cx, ty - cy)
+        if dist < PLAYER_EXCLUSION_RADIUS + 6:
+            return
+        if not (0 <= tx < w and 0 <= ty < h):
+            return
+        angle = math.atan2(ty - cy, tx - cx)
+        if angle_is_blocked(angle, blocked_angles):
+            return
+
+        if recent_angles:
+            min_diff       = min(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
+            repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 80.0
+            min_rev_diff   = min(abs((angle - (a + math.pi) + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
+            repeat_penalty += max(0.0, (0.55 - min_rev_diff) / 0.55) * 65.0
+        else:
+            repeat_penalty = 0.0
+
+        if sector_tracker is not None:
+            repeat_penalty += sector_tracker.penalty(angle)
+
+        path_score = ray_walkability_score(walkable, center, (tx, ty), samples=18)
+        if path_score < 0.42:
+            return
+
+        clearance = float(clearance_map[ty, tx])
+        if clearance < 1.0:
+            return
+
+        probe_tx = int(max(0, min(w - 1, cx + math.cos(angle) * min(28.0, dist * 0.4))))
+        probe_ty = int(max(0, min(h - 1, cy + math.sin(angle) * min(28.0, dist * 0.4))))
+        forward_score = ray_walkability_score(walkable, center, (probe_tx, probe_ty), samples=12)
+        if forward_score < 0.38:
+            return
+
+        clearance_bonus = min(42.0, clearance * 8.5)
+        score = dist * 2.5 + (path_score * 120.0) + (forward_score * 70.0) + clearance_bonus - repeat_penalty
+
+        # Frontier bonus: cell sits right on the edge of unexplored territory
+        if frontier_mask is not None and frontier_mask[ty, tx] > 0:
+            score += 280.0
+        elif unknown_fog[ty, tx] > 0:
+            score += 180.0  # inside fog (less precise target, but still novel)
+
+        if heatmap is not None:
+            score -= heatmap.penalty(tx, ty)
+        if ty > cy + 10 and path_score < 0.75:
+            score -= 20.0
+
+        if score > best_score:
+            best_score = score
+            best_dot   = (tx, ty)
+
+    # ── Phase 1: contour edge sampling ───────────────────────────────────────
+    contours, _ = cv2.findContours(walkable_cnt, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:
-        area = cv2.contourArea(cnt)
-        if area < 18:
+        if cv2.contourArea(cnt) < 14:
             continue
         points = cnt.reshape(-1, 2)
         if points.size == 0:
             continue
-
         distances = np.sqrt((points[:, 0] - cx) ** 2 + (points[:, 1] - cy) ** 2)
         order = np.argsort(distances)[::-1]
-        sample_count = min(10, len(order))
-        for idx in order[:sample_count]:
-            tx, ty = int(points[idx][0]), int(points[idx][1])
-            dist = float(distances[idx])
-            if dist < PLAYER_EXCLUSION_RADIUS + 6:
-                continue
+        for idx in order[:min(20, len(order))]:  # 20 samples (was 10)
+            _eval(int(points[idx][0]), int(points[idx][1]))
 
-            angle = math.atan2(ty - cy, tx - cx)
-            if angle_is_blocked(angle, blocked_angles):
-                continue
-
-            if recent_angles:
-                min_diff       = min(abs((angle - a + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
-                repeat_penalty = max(0.0, (0.60 - min_diff) / 0.60) * 80.0
-                # Penalise the reverse of recent directions so the bot doesn't drift
-                # back toward spawn when forward directions are over-penalised.
-                min_rev_diff   = min(abs((angle - (a + math.pi) + math.pi) % (2 * math.pi) - math.pi) for a in recent_angles)
-                repeat_penalty += max(0.0, (0.55 - min_rev_diff) / 0.55) * 65.0
-            else:
-                repeat_penalty = 0.0
-
-            if sector_tracker is not None:
-                repeat_penalty += sector_tracker.penalty(angle)
-
-            path_score = ray_walkability_score(walkable, center, (tx, ty), samples=18)
-            if path_score < 0.50:
-                continue
-
-            clearance = float(clearance_map[ty, tx])
-            if clearance < 1.3:
-                continue
-
-            probe_tx = int(max(0, min(w - 1, cx + math.cos(angle) * min(26.0, dist))))
-            probe_ty = int(max(0, min(h - 1, cy + math.sin(angle) * min(26.0, dist))))
-            forward_score = ray_walkability_score(walkable, center, (probe_tx, probe_ty), samples=12)
-            if forward_score < 0.45:
-                continue
-
-            clearance_bonus = min(42.0, clearance * 8.5)
-            score = dist + (path_score * 120.0) + (forward_score * 70.0) + clearance_bonus - repeat_penalty
-            if unknown_fog[ty, tx] > 0:
-                score += 150.0
-            if heatmap is not None:
-                score -= heatmap.penalty(tx, ty)
-            if ty > cy + 10 and path_score < 0.75:
-                score -= 20.0
-            if score > best_score:
-                best_score = score
-                best_dot   = (tx, ty)
+    # ── Phase 2: direct frontier cell sampling ───────────────────────────────
+    # Explicitly sample walkable cells that touch the fog boundary. These are
+    # often interior walkable cells not caught by Phase 1's contour edges.
+    if frontier_mask is not None and np.any(frontier_mask):
+        fy, fx = np.where(frontier_mask > 0)
+        if len(fx) > 0:
+            n = min(40, len(fx))
+            indices = np.random.choice(len(fx), n, replace=False)
+            for i in indices:
+                _eval(int(fx[i]), int(fy[i]))
 
     return best_dot
 
