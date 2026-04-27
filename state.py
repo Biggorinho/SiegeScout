@@ -20,6 +20,8 @@ from config import (
     TERRAIN_BLOCKED_THRESHOLD,
     TERRAIN_BLOCKED_DECAY_EVERY_UPDATES,
     TERRAIN_BLOCKED_DECAY_VALUE,
+    EXPLORE_NAV_STALL_FRAMES,
+    EXPLORE_NAV_STALL_MOTION_PX,
 )
 from minimap import dot_distance, dot_to_screen_delta, build_raw_walkable_minimap_mask
 from pathfinding import (
@@ -627,3 +629,69 @@ class EnemyChaser:
                 self._last_cmd_mag = math.hypot(bypass[0], bypass[1])
                 return bypass
         return nxt
+
+
+class ExploreNavigator:
+    """Waypoint-following path navigator for the EXPLORE state."""
+
+    def __init__(self):
+        self.path_queue: list = []
+        self.current_target = None
+        self._prev_gray = None
+        self._stall_frames: int = 0
+
+    def reset(self) -> None:
+        self.path_queue = []
+        self.current_target = None
+        self._prev_gray = None
+        self._stall_frames = 0
+
+    def plan(self, minimap_bgr, center, target, cached_mask) -> bool:
+        """Compute smoothed A* path to *target*. Returns True if a path was found."""
+        self._stall_frames = 0
+        self._prev_gray = None
+        self.current_target = target
+        if cached_mask is None:
+            self.path_queue = []
+            return False
+        raw = _a_star_full_path(cached_mask, center, target)
+        if not raw:
+            self.path_queue = []
+            return False
+        self.path_queue = smooth_path(raw, cached_mask)
+        return bool(self.path_queue)
+
+    def get_move(self, minimap_bgr, center, cached_mask):
+        """Return screen-space (dx, dy) toward the next waypoint, or None when done."""
+        if minimap_bgr is not None and minimap_bgr.size > 0:
+            gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY)
+            gray_b = cv2.GaussianBlur(gray, (3, 3), 0)
+            if self._prev_gray is not None and self._prev_gray.shape == gray_b.shape:
+                try:
+                    (sx, sy), response = cv2.phaseCorrelate(
+                        self._prev_gray.astype(np.float32),
+                        gray_b.astype(np.float32),
+                    )
+                    motion = math.hypot(float(sx), float(sy)) if response > 0.01 else 0.0
+                except cv2.error:
+                    motion = 0.0
+                if motion < EXPLORE_NAV_STALL_MOTION_PX:
+                    self._stall_frames = min(EXPLORE_NAV_STALL_FRAMES + 2,
+                                             self._stall_frames + 1)
+                else:
+                    self._stall_frames = max(0, self._stall_frames - 1)
+                if self._stall_frames >= EXPLORE_NAV_STALL_FRAMES:
+                    if self.path_queue:
+                        self.path_queue.pop(0)
+                    self._stall_frames = 0
+                    if self.current_target is not None and cached_mask is not None:
+                        self.plan(minimap_bgr, center, self.current_target, cached_mask)
+            self._prev_gray = gray_b
+
+        while self.path_queue and dot_distance(self.path_queue[0], center) < PATH_WAYPOINT_REACH_PX:
+            self.path_queue.pop(0)
+
+        if not self.path_queue:
+            return None
+
+        return dot_to_screen_delta(self.path_queue[0], center)
