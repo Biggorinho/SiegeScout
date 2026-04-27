@@ -63,3 +63,20 @@ def test_reset_clears_all_state():
     assert nav._prev_gray is None
     assert nav._stall_frames == 0
     assert nav.get_move(None, (10, 10), _open_mask()) is None
+
+
+def test_get_move_stall_detection_does_not_crash():
+    """Verify phaseCorrelate stall branch runs without error on repeated identical frames."""
+    from state import ExploreNavigator
+    nav = ExploreNavigator()
+    nav.plan(None, (10, 10), (80, 80), _open_mask())
+    # Synthetic BGR frame — solid grey, causes near-zero phaseCorrelate response
+    frame = np.full((64, 64, 3), 50, dtype=np.uint8)
+    center = (10, 10)  # far from first waypoint so waypoint doesn't get popped by distance
+    # Run enough ticks to exceed EXPLORE_NAV_STALL_FRAMES (=6)
+    for _ in range(10):
+        nav.get_move(frame, center, _open_mask())
+    # After many identical frames, stall counter should have fired at least once.
+    # We verify indirectly: no exception and _stall_frames was reset to 0 at least once.
+    # (After firing, _stall_frames resets to 0 and plan() sets _prev_gray=None, breaking the chain.)
+    assert nav._stall_frames == 0 or nav._stall_frames < 6

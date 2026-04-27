@@ -646,7 +646,7 @@ class ExploreNavigator:
         self._prev_gray = None
         self._stall_frames = 0
 
-    def plan(self, minimap_bgr, center, target, cached_mask) -> bool:
+    def plan(self, _minimap_bgr, center, target, cached_mask) -> bool:
         """Compute smoothed A* path to *target*. Returns True if a path was found."""
         self._stall_frames = 0
         self._prev_gray = None
