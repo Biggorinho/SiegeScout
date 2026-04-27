@@ -201,12 +201,14 @@ class TerrainMemory:
         self._known_blocked = None
         self._shape = None
         self._updates = 0
+        self._prev_gray = None
 
     def reset(self):
         self._known_walkable = None
         self._known_blocked = None
         self._shape = None
         self._updates = 0
+        self._prev_gray = None
 
     def _ensure_shape(self, shape):
         if self._shape is not None and self._shape != shape:
@@ -220,6 +222,37 @@ class TerrainMemory:
         observed = build_raw_walkable_minimap_mask(minimap_bgr)
         if observed is None or observed.size == 0:
             return
+
+        # Scroll compensation: shift accumulated maps to stay world-aligned.
+        # When the player moves, the minimap scrolls; old marks drift unless corrected.
+        gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY)
+        gray_b = cv2.GaussianBlur(gray, (3, 3), 0)
+        if self._prev_gray is not None and self._prev_gray.shape == gray_b.shape:
+            try:
+                (sx, sy), response = cv2.phaseCorrelate(
+                    self._prev_gray.astype(np.float32),
+                    gray_b.astype(np.float32),
+                )
+                if response > 0.02 and math.hypot(float(sx), float(sy)) > 0.5:
+                    h_mm, w_mm = observed.shape[:2]
+                    M = np.float32([[1, 0, -sx], [0, 1, -sy]])
+                    warp_kw = dict(
+                        dsize=(w_mm, h_mm),
+                        borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=0,
+                    )
+                    if (self._known_walkable is not None
+                            and self._known_walkable.shape == observed.shape):
+                        self._known_walkable = cv2.warpAffine(
+                            self._known_walkable, M, **warp_kw)
+                    if (self._known_blocked is not None
+                            and self._known_blocked.shape == observed.shape):
+                        self._known_blocked = cv2.warpAffine(
+                            self._known_blocked, M, **warp_kw)
+            except cv2.error:
+                pass
+        self._prev_gray = gray_b
+
         self._ensure_shape(observed.shape)
         if self._known_walkable is None:
             self._known_walkable = observed.copy()
