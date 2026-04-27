@@ -53,7 +53,6 @@ def test_terrain_memory_prev_gray_starts_none():
 
 
 def test_terrain_memory_prev_gray_cleared_on_reset():
-    import numpy as np
     tm = TerrainMemory()
     tm._prev_gray = np.zeros((10, 10), dtype=np.float32)
     tm.reset()
@@ -62,7 +61,6 @@ def test_terrain_memory_prev_gray_cleared_on_reset():
 
 def test_terrain_memory_no_crash_on_two_updates():
     """Scroll compensation must not raise when called on consecutive frames."""
-    import numpy as np
     from unittest.mock import patch
     fake_mask = np.full((64, 64), 255, dtype=np.uint8)
     tm = TerrainMemory()
@@ -72,3 +70,36 @@ def test_terrain_memory_no_crash_on_two_updates():
         tm.update(frame)  # first frame — sets _prev_gray
         tm.update(frame)  # second frame — runs phaseCorrelate + warpAffine
     assert tm._prev_gray is not None
+
+
+def test_terrain_memory_scroll_shifts_known_walkable():
+    from unittest.mock import patch
+    import cv2
+
+    tm = TerrainMemory()
+    h, w = 64, 64
+
+    # Frame 1: bright region in left-center
+    frame1 = np.zeros((h, w, 3), dtype=np.uint8)
+    frame1[20:44, 5:30] = 80
+
+    # Frame 2: same region shifted 5px right (minimap scrolled right)
+    frame2 = np.zeros((h, w, 3), dtype=np.uint8)
+    frame2[20:44, 10:35] = 80
+
+    fake_mask = np.zeros((h, w), dtype=np.uint8)
+    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+        tm.update(frame1)
+        # Set a sentinel pixel at a known position in _known_walkable
+        sentinel = np.zeros((h, w), dtype=np.uint8)
+        sentinel[32, 20] = 255
+        tm._known_walkable = sentinel.copy()
+        tm.update(frame2)
+
+    # phaseCorrelate(frame1_gray, frame2_gray) ≈ sx=+5 (frame2 is frame1 shifted right by 5px)
+    # warpAffine with M=[[1,0,-sx],[0,1,-sy]] shifts the map LEFT by ~5px
+    # Sentinel was at column 20 — it should now be near column 15
+    # Check that the sentinel moved leftward (columns 12-18), not stayed at 20
+    assert tm._known_walkable[32, 20] == 0, "Sentinel should have moved left"
+    assert tm._known_walkable[32, 15] == 255 or tm._known_walkable[32, 14] == 255 or tm._known_walkable[32, 16] == 255, \
+        "Sentinel should be near column 15 after leftward shift"
