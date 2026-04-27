@@ -646,7 +646,7 @@ class ExploreNavigator:
         self._prev_gray = None
         self._stall_frames = 0
 
-    def plan(self, _minimap_bgr, center, target, cached_mask) -> bool:
+    def plan(self, minimap_bgr, center, target, cached_mask) -> bool:  # minimap_bgr reserved for future heuristics
         """Compute smoothed A* path to *target*. Returns True if a path was found."""
         self._stall_frames = 0
         self._prev_gray = None
@@ -661,7 +661,7 @@ class ExploreNavigator:
         self.path_queue = smooth_path(raw, cached_mask)
         return bool(self.path_queue)
 
-    def get_move(self, minimap_bgr, center, cached_mask):
+    def get_move(self, minimap_bgr, center, cached_mask) -> "tuple[int, int] | None":
         """Return screen-space (dx, dy) toward the next waypoint, or None when done."""
         if minimap_bgr is not None and minimap_bgr.size > 0:
             gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY)
@@ -672,11 +672,11 @@ class ExploreNavigator:
                         self._prev_gray.astype(np.float32),
                         gray_b.astype(np.float32),
                     )
-                    motion = math.hypot(float(sx), float(sy)) if response > 0.01 else 0.0
+                    motion = math.hypot(float(sx), float(sy)) if response > 0.02 else 0.0
                 except cv2.error:
                     motion = 0.0
                 if motion < EXPLORE_NAV_STALL_MOTION_PX:
-                    self._stall_frames = min(EXPLORE_NAV_STALL_FRAMES + 2,
+                    self._stall_frames = min(EXPLORE_NAV_STALL_FRAMES + 2,  # +2 headroom for hysteresis
                                              self._stall_frames + 1)
                 else:
                     self._stall_frames = max(0, self._stall_frames - 1)
