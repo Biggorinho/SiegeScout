@@ -415,9 +415,9 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
 
         # Frontier bonus: cell sits right on the edge of unexplored territory
         if frontier_mask is not None and frontier_mask[ty, tx] > 0:
-            score += 280.0
+            score += 320.0
         elif unknown_fog[ty, tx] > 0:
-            score += 180.0  # inside fog (less precise target, but still novel)
+            score += 200.0
 
         if heatmap is not None:
             score -= heatmap.penalty(tx, ty)
@@ -447,7 +447,7 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
     if frontier_mask is not None and np.any(frontier_mask):
         fy, fx = np.where(frontier_mask > 0)
         if len(fx) > 0:
-            n = min(40, len(fx))
+            n = min(60, len(fx))
             indices = np.random.choice(len(fx), n, replace=False)
             for i in indices:
                 _eval(int(fx[i]), int(fy[i]))
