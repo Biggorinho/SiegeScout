@@ -7,6 +7,7 @@ import random
 import time
 import math
 import keyboard
+import stats_tracker as _st
 
 from config import (
     SCREEN_W, SCREEN_H,
@@ -25,8 +26,8 @@ from config import (
     ATTACK_NO_CONFIRMED_ENEMY_TIMEOUT_SECONDS,
     ATTACK_STUCK_WINDOW, ATTACK_STUCK_MIN_MOVE,
     ATTACK_STUCK_ARM_SECONDS,
-    EXPLORE_REPLAN_SECONDS, EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS,
-    EXPLORE_STUCK_WINDOW, EXPLORE_STUCK_MIN_MOVE, WALK_SCORE_REPLAN_COOLDOWN,
+    EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS,
+    EXPLORE_STUCK_WINDOW, EXPLORE_STUCK_MIN_MOVE,
     TERRAIN_BLOCKED_MARK_COOLDOWN_SECONDS,
     POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS,
     STUCK_LOG_COOLDOWN, STUCK_COUNT_EVENT_COOLDOWN_SECONDS,
@@ -37,6 +38,8 @@ from config import (
     VOTE_RESET_MIN_HP, NO_ENEMY_RESET_MIN_FRAMES,
     ZONE_MAX_SECONDS_BEFORE_RESET, ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS,
     ZONE_TRANSITION_FREEZE_SECONDS,
+    ZONE_PACKET_MIN_FREEZE_SECONDS,
+    ZONE_PACKET_SETTLE_SECONDS,
     DEATH_RESPAWN_COOLDOWN_SECONDS, DEATH_CONFIRM_FRAMES,
     RESPAWN_TO_RESET_DELAY_SECONDS,
     ENEMY_CONFIRM_FRAMES, ENEMY_LOST_FRAMES,
@@ -72,8 +75,9 @@ from minimap import (
 from pathfinding import (
     ray_walkability_score, choose_explore_delta, choose_recent_enemy_delta,
     choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
+    minimap_explore_target,
 )
-from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser
+from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
@@ -129,7 +133,6 @@ def run(
     adx, ady           = 0, 0
     explore_dx, explore_dy       = random_explore_delta()
     explore_held_keys            = frozenset()
-    last_explore_plan_t          = 0.0
     recent_explore_angles        = []
     blocked_explore_angles       = []
     attack_held                  = False
@@ -149,6 +152,7 @@ def run(
     kite_cached_move             = None
     last_backtrack_t             = [0.0]
     explore_heatmap              = ExploreHeatMap()
+    explore_navigator            = ExploreNavigator()
     enemy_chaser                 = EnemyChaser()
     sector_tracker               = SectorTracker()
     escape_committed_until       = 0.0
@@ -207,6 +211,7 @@ def run(
     last_loot_items_scan_t       = 0.0
     last_loot_items_click_t      = 0.0
     last_terrain_block_mark_t    = 0.0
+    _zone_logged_reset_t         = 0.0   # last_vote_reset_t for which zone confirm was printed
     # ── shared reset helper ────────────────────────────────────────────────────
     # Defined as a closure so it can assign back into run()'s local scope.
     def _do_zone_reset():
@@ -215,7 +220,7 @@ def run(
         nonlocal corner_escape_attempts, no_enemy_frames, hp_bar_missing_until
         nonlocal zone_started_t, zone_opening_rightclick_pending, state, state_start
         nonlocal explore_pause_until, death_screen_frames, hp_zero_since
-        nonlocal last_explore_plan_t, explore_dx, explore_dy, last_explore_target
+        nonlocal explore_dx, explore_dy, last_explore_target
         nonlocal last_any_enemy_seen_t
         nonlocal escape_committed_until, escape_dx, escape_dy
         nonlocal explore_held_keys
@@ -243,7 +248,6 @@ def run(
         death_screen_frames           = 0
         hp_zero_since                 = 0.0
         last_any_enemy_seen_t         = 0.0
-        last_explore_plan_t           = 0.0
         explore_dx, explore_dy        = random_explore_delta()
         last_explore_target           = None
 
@@ -271,6 +275,7 @@ def run(
         last_terrain_block_mark_t = 0.0
         vote_reset_fail_streak = 0
         vote_reset_lockout_until = 0.0
+        explore_navigator.reset()
 
     def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
         nonlocal state, state_start, hard_stuck_since, escape_committed_until
@@ -409,6 +414,23 @@ def run(
             if now_loop < zone_transition_until:
                 release_all_inputs()
                 attack_held = False
+                _pkt_tracker = _st.get_tracker()
+                if (_pkt_tracker and _pkt_tracker.available
+                        and last_vote_reset_t > _zone_logged_reset_t):
+                    _za = _pkt_tracker.zone_entered_at
+                    if _za is not None and _za > last_vote_reset_t:
+                        _buffs = _pkt_tracker.active_buffs
+                        _buff_str = ", ".join(_buffs) if _buffs else "none"
+                        print(f"[ZONE] {_pkt_tracker.current_zone}  |  buffs: {_buff_str}")
+                        _zone_logged_reset_t = last_vote_reset_t
+                        # Early exit: if min freeze has passed, let the packet
+                        # shorten the remaining wait instead of the fixed 5.5 s.
+                        if (now_loop - last_vote_reset_t) >= ZONE_PACKET_MIN_FREEZE_SECONDS:
+                            _early = _za + ZONE_PACKET_SETTLE_SECONDS
+                            if _early < zone_transition_until:
+                                _saved = zone_transition_until - max(_early, now_loop)
+                                zone_transition_until = _early
+                                print(f"[ZONE] Early freeze exit — saved {_saved:.1f}s")
                 sleep_interruptible(0.08)
                 continue
 
@@ -454,6 +476,28 @@ def run(
                 release_all_inputs()
                 attack_held = False
                 auto_q_ignore_until = time.time() + 0.8
+                # One-time zone packet check after freeze.
+                # The packet often arrives slightly after the freeze ends on slower machines,
+                # so wait up to 2 s before declaring a failure.
+                _pkt_zo = _st.get_tracker()
+                if (_pkt_zo and _pkt_zo.available
+                        and last_vote_reset_t > _zone_logged_reset_t):
+                    _za = _pkt_zo.zone_entered_at
+                    if _za is None or _za <= last_vote_reset_t:
+                        _wait_until = time.time() + 2.0
+                        while time.time() < _wait_until:
+                            if not sleep_interruptible(0.1):
+                                break
+                            _za = _pkt_zo.zone_entered_at
+                            if _za is not None and _za > last_vote_reset_t:
+                                break
+                    if _za is not None and _za > last_vote_reset_t:
+                        _buffs = _pkt_zo.active_buffs
+                        _buff_str = ", ".join(_buffs) if _buffs else "none"
+                        print(f"[ZONE] {_pkt_zo.current_zone}  |  buffs: {_buff_str}")
+                    else:
+                        print("[ZONE] no zone packet yet — zone selected, packet arrives on first game event")
+                    _zone_logged_reset_t = last_vote_reset_t
 
                 opening_frame = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
                 opening_hp = get_hp_percent(opening_frame)
@@ -569,7 +613,12 @@ def run(
                         tap_key(HEALTH_POTION_KEY, hold_time=0.06)
                         time.sleep(HEALTH_POTION_BURST_GAP_SECONDS)
                     last_health_potion_t = now_loop
-                if (hp or 0.0) < HP_FLEE_THRESHOLD and state != State.FLEE:
+                _pkt_t = _st.get_tracker()
+                _flee_thr = HP_FLEE_THRESHOLD * (
+                    0.55 if (_pkt_t and _pkt_t.available
+                             and _st.BUFF_CLAIRVOYANCE in _pkt_t.active_buffs) else 1.0
+                )
+                if (hp or 0.0) < _flee_thr and state != State.FLEE:
                     print(f"HP {(hp or 0.0):.0%} -> FLEE")
                     state       = State.FLEE
                     state_start = time.time()
@@ -872,7 +921,13 @@ def run(
                     mining_target_screen = None
 
                 # ── LOOT ITEMS (new): star-marker hint + on-screen tag click ───────────
-                if _enable_loot_items and resource_collect_allowed and not confirmed_enemy_now:
+                _loot_t = _st.get_tracker()
+                _loot_goblin_active = (
+                    _loot_t and _loot_t.available
+                    and any(b in _loot_t.active_buffs
+                            for b in ("Loot Goblin I", "Loot Goblin II"))
+                )
+                if (_enable_loot_items or _loot_goblin_active) and resource_collect_allowed and not confirmed_enemy_now:
                     if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
@@ -896,13 +951,11 @@ def run(
 
                 explore_intent_stuck.update(minimap, explore_dx, explore_dy)
 
-                replanning_due   = (time.time() - last_explore_plan_t) > EXPLORE_REPLAN_SECONDS
                 explore_is_stuck = stuck.is_stuck() or explore_intent_stuck.is_stuck()
 
-                # Honour escape commitment — hold escape direction, suppress replanning.
+                # Honour escape commitment — hold escape direction, suppress navigator.
                 if now_loop < escape_committed_until:
                     explore_dx, explore_dy = escape_dx, escape_dy
-                    replanning_due         = False
                     explore_is_stuck       = False
 
                 if explore_is_stuck and now_loop >= escape_committed_until:
@@ -944,72 +997,50 @@ def run(
                     escape_dx, escape_dy   = esc_dx, esc_dy
                     escape_committed_until = now_loop + random.uniform(
                         ESCAPE_COMMIT_MIN_SECONDS, ESCAPE_COMMIT_MAX_SECONDS)
-                    replanning_due = True
+                    explore_navigator.reset()
                 elif now_loop >= escape_committed_until:
                     hard_stuck_since       = 0.0
                     corner_escape_attempts = 0
                     explore_stuck_active   = False
                     explore_stuck_jump_pref[0] = False
 
-                if replanning_due:
-                    recent_enemy_valid = (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
-                    target = None
-                    _guided = False
-                    if recent_enemy_valid:
-                        (guided_move, target) = choose_recent_enemy_delta(
-                            minimap, center,
-                            recent_enemy_dot=last_seen_enemy_dot,
-                            recent_enemy_vec=last_seen_enemy_vec,
-                            terrain_memory=terrain_memory,
+                # Navigator picks direction when not in a committed escape window.
+                if now_loop >= escape_committed_until:
+                    move = explore_navigator.get_move(minimap, center, cached_mask)
+                    if move is None:
+                        recent_enemy_valid = (
+                            (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
                         )
-                        if guided_move is not None:
-                            explore_dx, explore_dy = guided_move
-                            _guided = True
-                    if target is None:
-                        (explore_dx, explore_dy), target = choose_explore_delta(
-                            minimap, center, recent_explore_angles, blocked_explore_angles,
-                            heatmap=explore_heatmap, terrain_memory=terrain_memory,
-                            sector_tracker=sector_tracker)
-                    if target is not None:
-                        _ang_deg = math.degrees(math.atan2(explore_dy, explore_dx))
-                        _method  = "guided-enemy" if _guided else "free"
-                        print(f"[PATH] replan {_method} -> {_ang_deg:.0f}° target=({target[0]},{target[1]})")
-                        angle = math.atan2(target[1] - center[1], target[0] - center[0])
-                        recent_explore_angles.append(angle)
-                        recent_explore_angles = recent_explore_angles[-8:]
-                        sector_tracker.update(angle)
-                        last_explore_target = target
-                    last_explore_plan_t = time.time()
-
-                if cached_mask is not None and last_explore_target is not None and \
-                        (time.time() - last_explore_plan_t) > WALK_SCORE_REPLAN_COOLDOWN:
-                    walk_score = ray_walkability_score(
-                        cached_mask, center, last_explore_target, samples=14)
-                    if walk_score < 0.55:
-                        print(f"[PATH] walk-score {walk_score:.2f} -> replan")
-                        recent_enemy_valid = (now_loop - last_seen_enemy_t) <= LAST_SEEN_MONSTER_MEMORY_SECONDS
-                        target = None
+                        new_target = None
                         if recent_enemy_valid:
-                            (guided_move, target) = choose_recent_enemy_delta(
+                            _, new_target = choose_recent_enemy_delta(
                                 minimap, center,
                                 recent_enemy_dot=last_seen_enemy_dot,
                                 recent_enemy_vec=last_seen_enemy_vec,
                                 terrain_memory=terrain_memory,
                             )
-                            if guided_move is not None:
-                                explore_dx, explore_dy = guided_move
-                        if target is None:
-                            (explore_dx, explore_dy), target = choose_explore_delta(
-                                minimap, center, recent_explore_angles, blocked_explore_angles,
-                                heatmap=explore_heatmap, terrain_memory=terrain_memory,
-                                sector_tracker=sector_tracker)
-                        if target is not None:
-                            angle = math.atan2(target[1] - center[1], target[0] - center[0])
+                        if new_target is None:
+                            new_target = minimap_explore_target(
+                                minimap, center,
+                                recent_explore_angles, blocked_explore_angles,
+                                heatmap=explore_heatmap,
+                                terrain_memory=terrain_memory,
+                                sector_tracker=sector_tracker,
+                            )
+                        if new_target is not None and explore_navigator.plan(
+                                minimap, center, new_target, cached_mask):
+                            angle = math.atan2(
+                                new_target[1] - center[1],
+                                new_target[0] - center[0],
+                            )
                             recent_explore_angles.append(angle)
                             recent_explore_angles = recent_explore_angles[-8:]
                             sector_tracker.update(angle)
-                            last_explore_target = target
-                        last_explore_plan_t = time.time()
+                            last_explore_target = new_target
+                            move = explore_navigator.get_move(minimap, center, cached_mask)
+                        if move is None:
+                            move = random_explore_delta()
+                    explore_dx, explore_dy = move
 
                 explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
                 if _enable_movement_ability and \
@@ -1017,7 +1048,12 @@ def run(
                         now_loop >= rightclick_busy_until:
                     cast_movement_ability(explore_dx, explore_dy, key=_movement_ability_key)
                     last_movement_ability_t = now_loop
-                sleep_interruptible(random.uniform(EXPLORE_MOVE_MIN_SECONDS, EXPLORE_MOVE_MAX_SECONDS))
+                _spd_t = _st.get_tracker()
+                _move_spd = (0.65 if (_spd_t and _spd_t.available
+                                       and _st.BUFF_ZEPHYS_GRACE in _spd_t.active_buffs)
+                             else 1.0)
+                sleep_interruptible(random.uniform(EXPLORE_MOVE_MIN_SECONDS * _move_spd,
+                                                   EXPLORE_MOVE_MAX_SECONDS * _move_spd))
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t)
 
@@ -1106,7 +1142,18 @@ def run(
                     enemy_dist        = dot_distance(nearest, center)
                     last_flee_dir     = (-adx, -ady)
 
-                enemy_gone = (time.time() - last_enemy_seen_t) > ATTACK_LOST_GRACE
+                _pkt_t2 = _st.get_tracker()
+                _aftermath = (
+                    _pkt_t2 and _pkt_t2.available
+                    and _st.BUFF_AFTERMATH in _pkt_t2.active_buffs
+                )
+                _lost_grace = ATTACK_LOST_GRACE * (2.5 if _aftermath else 1.0)
+                # Packet-confirmed kill + no visible enemy → skip long visual grace
+                if (not confirmed_enemy_now and not _aftermath
+                        and _pkt_t2 and _pkt_t2.available
+                        and _pkt_t2.last_kill_t > state_start):
+                    _lost_grace = min(_lost_grace, 0.4)
+                enemy_gone = (time.time() - last_enemy_seen_t) > _lost_grace
                 timed_out  = (time.time() - state_start) > ATTACK_TIMEOUT
 
                 if enemy_gone:
@@ -1207,12 +1254,17 @@ def run(
                 wasd_move(flee_delta[0], flee_delta[1], random.uniform(0.5, 1.0))
 
                 hp = get_hp_percent(frame)
+                _pkt_tf = _st.get_tracker()
+                _resume_thr = HP_RESUME_THRESHOLD * (
+                    0.65 if (_pkt_tf and _pkt_tf.available
+                             and _st.BUFF_CLAIRVOYANCE in _pkt_tf.active_buffs) else 1.0
+                )
                 if hp is None:
                     if (time.time() - state_start) > FLEE_MAX_WAIT:
                         print("HP missing -> EXPLORE")
                         state       = State.EXPLORE
                         state_start = time.time()
-                elif hp >= HP_RESUME_THRESHOLD or (time.time() - state_start) > FLEE_MAX_WAIT:
+                elif hp >= _resume_thr or (time.time() - state_start) > FLEE_MAX_WAIT:
                     print(f"HP {hp:.0%} -> EXPLORE")
                     state       = State.EXPLORE
                     state_start = time.time()
