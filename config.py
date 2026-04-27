@@ -85,10 +85,10 @@ WALL_BUFFER_ITERATIONS     = 2
 
 TERRAIN_BLOCKED_PATCH_RADIUS           = 14
 TERRAIN_BLOCKED_MARK_AHEAD_PX          = 12
-TERRAIN_BLOCKED_MARK_STRENGTH          = 70
+TERRAIN_BLOCKED_MARK_STRENGTH          = 90
 TERRAIN_BLOCKED_THRESHOLD              = 42
-TERRAIN_BLOCKED_DECAY_EVERY_UPDATES    = 50
-TERRAIN_BLOCKED_DECAY_VALUE            = 8
+TERRAIN_BLOCKED_DECAY_EVERY_UPDATES    = 80
+TERRAIN_BLOCKED_DECAY_VALUE            = 5
 TERRAIN_BLOCKED_MARK_COOLDOWN_SECONDS  = 0.55
 
 STUCK_BACKTRACK_DURATION_MIN  = 0.25
@@ -222,12 +222,16 @@ SATANIC_FIXED_NODES = {
     "The Devil's Breach": (698, 679),
     "The Glacial Trail": (467, 265),
     "The Highland Mines": (440, 765),
-    "The Nightmare": (578, 730),
-    "The Pumpkin Patch": (246, 525),
+    "The Nightmare": (578, 702),
+    "The Pumpkin Patch": (244, 499),
     "Woodhill Plains": (339, 463),
 }
 
 ZONE_TRANSITION_FREEZE_SECONDS    = 5.5
+# Packet-driven early exit: zone packet shortens the freeze window once
+# MIN_FREEZE seconds have elapsed and SETTLE seconds have passed since the packet.
+ZONE_PACKET_MIN_FREEZE_SECONDS    = 1.5
+ZONE_PACKET_SETTLE_SECONDS        = 0.5
 
 DEATH_RESPAWN_X_FRAC              = 0.50
 DEATH_RESPAWN_Y_FRAC              = 0.83
@@ -248,3 +252,6 @@ ENABLE_KEY3_SKILL                  = True
 ENABLE_MOVEMENT_ABILITY            = True
 MOVEMENT_ABILITY_KEY               = 'r'
 MOVEMENT_ABILITY_COOLDOWN_SECONDS  = 3.0
+
+EXPLORE_NAV_STALL_FRAMES    = 6
+EXPLORE_NAV_STALL_MOTION_PX = 0.45
