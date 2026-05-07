@@ -63,6 +63,7 @@ from config import (
 from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible,
+    is_pause_menu_visible, is_options_menu_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
 )
@@ -168,6 +169,8 @@ def run(
     vote_reset_fail_streak       = 0
     vote_reset_lockout_until     = 0.0
     auto_esc_ignore_until        = 0.0
+    vote_reset_in_progress       = False
+    menu_escape_cooldown_until   = 0.0
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
     last_health_potion_t         = 0.0
@@ -320,6 +323,16 @@ def run(
             print("[RST] pre-reset spin (~3s)")
             spin_to_clear_melee(rounds=2, radius=200, steps=36)
 
+        def _run_vote_reset(target_zone):
+            """Wrap run_vote_reset_sequence so the global safety-net flag is
+            always cleared, even if the call raises."""
+            nonlocal vote_reset_in_progress
+            vote_reset_in_progress = True
+            try:
+                return run_vote_reset_sequence(sct, full_mon, target_zone=target_zone)
+            finally:
+                vote_reset_in_progress = False
+
         def _attempt_vote_reset(with_spin=True):
             """Run vote reset once and apply cooldown on both success and failure."""
             nonlocal last_vote_reset_t, auto_esc_ignore_until
@@ -332,7 +345,7 @@ def run(
             # Set immediately to prevent same-tick retriggers while reset is running.
             last_vote_reset_t = attempt_t
             auto_esc_ignore_until = attempt_t + 1.0
-            ok = run_vote_reset_sequence(sct, full_mon, target_zone=target_zone)
+            ok = _run_vote_reset(target_zone)
             if ok:
                 vote_reset_fail_streak = 0
                 vote_reset_lockout_until = 0.0
@@ -466,7 +479,7 @@ def run(
                         tap_key('esc', hold_time=0.10)
                         sleep_interruptible(0.40)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if run_vote_reset_sequence(sct, full_mon, target_zone=target_zone):
+                    if _run_vote_reset(target_zone):
                         _do_zone_reset()
                     death_screen_frames = 0
                     continue
@@ -549,6 +562,24 @@ def run(
                 next_attack_key3_t                = time.time() + _key3_cooldown
                 continue
 
+            # ── stuck-in-menu safety net ──────────────────────────────────────
+            # Only fires when no vote-reset is in progress (vote-reset legitimately
+            # opens the pause menu). Press ESC to exit Options menu first; on the
+            # next iteration the loop will see the pause menu and ESC again.
+            if not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until:
+                if is_options_menu_visible(frame):
+                    print("[MENU] options menu detected — ESC")
+                    auto_esc_ignore_until      = time.time() + 1.0
+                    tap_key('esc', hold_time=0.12)
+                    menu_escape_cooldown_until = now_loop + 0.8
+                    continue
+                if is_pause_menu_visible(frame):
+                    print("[MENU] pause menu detected — ESC")
+                    auto_esc_ignore_until      = time.time() + 1.0
+                    tap_key('esc', hold_time=0.12)
+                    menu_escape_cooldown_until = now_loop + 0.8
+                    continue
+
             # ── capture minimap ───────────────────────────────────────────────
             minimap_region = get_minimap_region(minimap_mode)
             minimap        = cv2.cvtColor(np.array(sct.grab(minimap_region)), cv2.COLOR_BGRA2BGR)
@@ -580,7 +611,7 @@ def run(
                     attempt_respawn(sct, full_mon)
                     sleep_interruptible(RESPAWN_TO_RESET_DELAY_SECONDS)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if run_vote_reset_sequence(sct, full_mon, target_zone=target_zone):
+                    if _run_vote_reset(target_zone):
                         _do_zone_reset()
                 sleep_interruptible(0.08)
                 continue
