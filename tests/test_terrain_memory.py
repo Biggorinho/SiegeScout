@@ -103,3 +103,71 @@ def test_terrain_memory_scroll_shifts_known_walkable():
     assert tm._known_walkable[32, 20] == 0, "Sentinel should have moved left"
     assert tm._known_walkable[32, 15] == 255 or tm._known_walkable[32, 14] == 255 or tm._known_walkable[32, 16] == 255, \
         "Sentinel should be near column 15 after leftward shift"
+
+
+def test_terrain_memory_phasecorrelate_skipped_on_identical_frames():
+    """When the minimap is unchanged the FFT-scroll path must not run.
+
+    Verified indirectly by placing a sentinel into _known_walkable and confirming
+    it stays in place after a second update with an identical frame (warp would
+    shift it; the early-out preserves it).
+    """
+    from unittest.mock import patch
+    import cv2  # noqa: F401  — confirms env has cv2 available
+    h, w = 64, 64
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    frame[:, :] = (30, 30, 30)
+    fake_mask = np.zeros((h, w), dtype=np.uint8)
+
+    tm = TerrainMemory()
+    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+        tm.update(frame)
+        sentinel = np.zeros((h, w), dtype=np.uint8)
+        sentinel[32, 20] = 255
+        tm._known_walkable = sentinel.copy()
+        # Same frame again → mean-absdiff is 0 → phaseCorrelate gate skips warp.
+        tm.update(frame)
+
+    # Sentinel preserved at exact location: warp didn't run.
+    assert tm._known_walkable[32, 20] == 255
+
+
+def test_terrain_memory_spatial_decay_keeps_marks_near_player():
+    """Marks within the keep-radius shouldn't fade; marks beyond should."""
+    from state import TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX
+    from config import (
+        TERRAIN_BLOCKED_DECAY_EVERY_UPDATES,
+        TERRAIN_BLOCKED_DECAY_VALUE,
+    )
+    from unittest.mock import patch
+
+    h, w = 240, 240
+    frame = np.zeros((h, w, 3), dtype=np.uint8)
+    frame[:, :] = (30, 30, 30)
+    fake_mask = np.zeros((h, w), dtype=np.uint8)
+
+    tm = TerrainMemory()
+    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+        tm.update(frame)  # seeds _known_blocked etc.
+
+        cx_pl, cy_pl = w // 2, h // 2
+        # Near mark: at the player position (always inside keep-radius).
+        # Far mark: directly east of the player, beyond the keep-radius.
+        far_x = cx_pl + TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX + 20
+        assert tm._known_blocked is not None
+        tm._known_blocked[cy_pl, cx_pl] = 200
+        tm._known_blocked[cy_pl, far_x] = 200
+
+        # Run enough additional updates to trigger at least one decay cycle.
+        # _updates is already 1 from the first update above; we need it to hit
+        # a multiple of TERRAIN_BLOCKED_DECAY_EVERY_UPDATES.
+        for _ in range(TERRAIN_BLOCKED_DECAY_EVERY_UPDATES):
+            tm.update(frame)
+
+    near_value = int(tm._known_blocked[cy_pl, cx_pl])
+    far_value = int(tm._known_blocked[cy_pl, far_x])
+
+    assert near_value == 200, f"near mark should be untouched, got {near_value}"
+    assert far_value < 200, f"far mark should be reduced, got {far_value}"
+    # Sanity: at least one DECAY_VALUE step was applied to the far mark.
+    assert far_value <= 200 - TERRAIN_BLOCKED_DECAY_VALUE
