@@ -33,6 +33,13 @@ from pathfinding import (
     random_explore_delta
 )
 
+# Spatial decay for TerrainMemory's _known_blocked: marks within this many
+# minimap pixels of the player (= minimap geometric centre) stay sharp; marks
+# beyond that radius fade. Tuned for a ~225×216 minimap so the keep-area
+# covers the immediate vicinity while edges (which the player is moving away
+# from) decay normally.
+TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX = 60
+
 
 class State(Enum):
     EXPLORE = "EXPLORE"
@@ -269,10 +276,17 @@ class TerrainMemory:
             self._known_walkable = cv2.bitwise_or(self._known_walkable, observed)
         self._updates += 1
         if self._updates % TERRAIN_BLOCKED_DECAY_EVERY_UPDATES == 0 and self._known_blocked is not None:
-            self._known_blocked = cv2.subtract(
-                self._known_blocked,
-                np.full_like(self._known_blocked, TERRAIN_BLOCKED_DECAY_VALUE),
-            )
+            # Spatial decay: only fade marks beyond the keep-radius from the
+            # player. The player is at the minimap's geometric centre, so we
+            # use that as the radius origin. Walls just bumped (near the
+            # player) keep their full strength; older marks scrolled toward
+            # the edges fade as the player moves away.
+            h, w = self._known_blocked.shape
+            cx_pl, cy_pl = w // 2, h // 2
+            ys, xs = np.ogrid[:h, :w]
+            far_mask = ((xs - cx_pl) ** 2 + (ys - cy_pl) ** 2) > TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX ** 2
+            decay = np.where(far_mask, TERRAIN_BLOCKED_DECAY_VALUE, 0).astype(np.uint8)
+            self._known_blocked = cv2.subtract(self._known_blocked, decay)
         self._shape = observed.shape
 
     def mark_blocked(self, center, move_dx, move_dy):
