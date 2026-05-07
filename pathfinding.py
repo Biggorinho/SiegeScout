@@ -52,8 +52,15 @@ def _nearest_walkable_cell(grid, gx, gy, radius=6):
     return best
 
 
+_OCTILE_DIAG = 0.41421356  # √2 − 1
+
+
 def _run_astar(grid, s, t):
-    """Core A* search on a boolean grid. Returns came_from dict or None on failure."""
+    """Core A* search on a boolean 8-connected grid. Returns came_from dict or None on failure.
+
+    Uses the octile heuristic — admissible and tighter than Euclidean for unit-cost
+    grids with diagonal cost √2, so fewer nodes get expanded.
+    """
     gh, gw = grid.shape
     neighbors = [(-1, 0, 1.0), (1, 0, 1.0), (0, -1, 1.0), (0, 1, 1.0),
                  (-1, -1, 1.414), (-1, 1, 1.414), (1, -1, 1.414), (1, 1, 1.414)]
@@ -65,7 +72,9 @@ def _run_astar(grid, s, t):
     closed   = set()
 
     def h(a, b):
-        return math.hypot(a[0] - b[0], a[1] - b[1])
+        dx = abs(a[0] - b[0])
+        dy = abs(a[1] - b[1])
+        return max(dx, dy) + _OCTILE_DIAG * min(dx, dy)
 
     while open_heap:
         _, current = heapq.heappop(open_heap)
@@ -89,8 +98,14 @@ def _run_astar(grid, s, t):
     return came_from if t in came_from else None
 
 
-def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_steps=PATH_WAYPOINT_STEPS):
-    """Return a waypoint on a walkable A* path from center to target (minimap coords)."""
+def _astar_grid_path(mask, center, target, step):
+    """A* on a step-downsampled walkable mask. Returns list of (gx, gy) grid cells.
+
+    Returns:
+        None              — invalid mask, no walkable cell near s/t, or no path exists
+        [s]               — start cell == target cell (grid quantisation collapsed them)
+        [s, ..., t]       — full grid path including both endpoints
+    """
     if mask is None or mask.size == 0:
         return None
 
@@ -109,7 +124,7 @@ def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_st
     if s is None or t is None:
         return None
     if s == t:
-        return target
+        return [s]
 
     came_from = _run_astar(grid, s, t)
     if came_from is None:
@@ -121,45 +136,28 @@ def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_st
         cur = came_from[cur]
         path.append(cur)
     path.reverse()
+    return path
 
-    idx  = min(waypoint_steps, len(path) - 1)
-    wx, wy = path[idx]
-    return (wx * step + step // 2, wy * step + step // 2)
+
+def _a_star_next_waypoint(mask, center, target, step=PATH_GRID_STEP, waypoint_steps=PATH_WAYPOINT_STEPS):
+    """Return a waypoint on a walkable A* path from center to target (minimap coords)."""
+    path = _astar_grid_path(mask, center, target, step)
+    if path is None:
+        return None
+    if len(path) <= 1:
+        return target
+    idx    = min(waypoint_steps, len(path) - 1)
+    gx, gy = path[idx]
+    return (gx * step + step // 2, gy * step + step // 2)
 
 
 def _a_star_full_path(mask, center, target, step=PATH_GRID_STEP):
     """Return full A* path as list of minimap (x, y) coords, or None."""
-    if mask is None or mask.size == 0:
+    path = _astar_grid_path(mask, center, target, step)
+    if path is None:
         return None
-
-    grid = (mask[::step, ::step] > 0)
-    gh, gw = grid.shape
-    if gh == 0 or gw == 0:
-        return None
-
-    sx = int(max(0, min(gw - 1, center[0] // step)))
-    sy = int(max(0, min(gh - 1, center[1] // step)))
-    tx = int(max(0, min(gw - 1, target[0] // step)))
-    ty = int(max(0, min(gh - 1, target[1] // step)))
-
-    s = _nearest_walkable_cell(grid, sx, sy)
-    t = _nearest_walkable_cell(grid, tx, ty)
-    if s is None or t is None:
-        return None
-    if s == t:
+    if len(path) <= 1:
         return [target]
-
-    came_from = _run_astar(grid, s, t)
-    if came_from is None:
-        return None
-
-    path = [t]
-    cur  = t
-    while cur != s:
-        cur = came_from[cur]
-        path.append(cur)
-    path.reverse()
-
     return [(gx * step + step // 2, gy * step + step // 2) for gx, gy in path]
 
 
