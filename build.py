@@ -8,8 +8,9 @@ from pathlib import Path
 from PIL import Image
 
 ROOT = Path(__file__).parent
-LOGO_PNG = ROOT / "logo.png"
-LOGO_ICO = ROOT / "siegescout.ico"
+ASSETS_DIR = ROOT / "assets"
+LOGO_PNG = ASSETS_DIR / "logo.png"
+LOGO_ICO = ASSETS_DIR / "siegescout.ico"
 DIST_DIR = ROOT / "dist"
 
 

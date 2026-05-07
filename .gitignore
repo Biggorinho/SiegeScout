@@ -1,11 +1,26 @@
+# Python bytecode
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+
+# Logs
 *.log
 
+# Virtualenvs
 .venv/
+
+# Build artifacts (PyInstaller / Nuitka)
+build/
+dist/
+*.spec.bak
+
+# Editor / tool dirs
 .claude/
+.vscode/
+.continue/
+.agents/
+.pytest_cache/
 
 # Local runtime outputs
 debug/

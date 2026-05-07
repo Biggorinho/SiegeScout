@@ -37,7 +37,7 @@ MAUVE = "#9b7fd4"
 PEACH = "#c87d3a"
 LOG_BG = "#111311"
 
-LOGO_FILE = "logo.png"
+LOGO_FILE = os.path.join("assets", "logo.png")
 
 
 def _asset(name: str) -> str:
