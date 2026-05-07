@@ -161,6 +161,39 @@ def _a_star_full_path(mask, center, target, step=PATH_GRID_STEP):
     return [(gx * step + step // 2, gy * step + step // 2) for gx, gy in path]
 
 
+def _line_is_clear(mask, p0, p1):
+    """Bresenham line walk: True iff every pixel on segment p0→p1 is walkable.
+
+    More accurate than `ray_walkability_score(samples=N)` for line-of-sight checks
+    because it visits *every* pixel along the line rather than N evenly-spaced
+    samples — a 1-pixel-wide wall slipping between samples is impossible.
+    """
+    if mask is None or mask.size == 0:
+        return False
+    x0, y0 = int(p0[0]), int(p0[1])
+    x1, y1 = int(p1[0]), int(p1[1])
+    h, w = mask.shape[:2]
+
+    dx =  abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+
+    while True:
+        if not (0 <= x0 < w and 0 <= y0 < h) or mask[y0, x0] == 0:
+            return False
+        if x0 == x1 and y0 == y1:
+            return True
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x0  += sx
+        if e2 <= dx:
+            err += dx
+            y0  += sy
+
+
 def smooth_path(path, mask):
     """String-pull an A* path: skip intermediate waypoints when line-of-sight is clear."""
     if not path or len(path) < 3 or mask is None:
@@ -170,7 +203,7 @@ def smooth_path(path, mask):
     while i < len(path) - 1:
         j = len(path) - 1
         while j > i + 1:
-            if ray_walkability_score(mask, path[i], path[j], samples=20) >= 0.95:
+            if _line_is_clear(mask, path[i], path[j]):
                 break
             j -= 1
         smoothed.append(path[j])
