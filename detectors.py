@@ -548,6 +548,65 @@ def is_pause_menu_visible(frame_bgr):
     return bar_count >= 2
 
 
+def is_options_menu_visible(frame_bgr):
+    """Detect the in-game Options menu by its row of red horizontal tabs near the top.
+
+    The Options screen has six landscape tabs (VIDEO / AUDIO / GAMEPLAY /
+    CONTROLS / RESET / BACK) sitting in a single row across the upper edge of
+    the screen. Detection requires at least four tabs aligned on the same row
+    so that a partially occluded skin or a slightly recoloured active tab
+    still triggers, while pause-menu vertical button stacks do not.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+
+    h, w = frame_bgr.shape[:2]
+    x0, x1 = int(w * 0.10), int(w * 0.95)
+    y0, y1 = int(h * 0.02), int(h * 0.12)
+    roi = frame_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    r1 = cv2.inRange(hsv, np.array([0, 45, 38]), np.array([20, 255, 255]))
+    r2 = cv2.inRange(hsv, np.array([160, 45, 38]), np.array([180, 255, 255]))
+    red = cv2.bitwise_or(r1, r2)
+    red = cv2.morphologyEx(red, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8), iterations=1)
+    red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
+
+    contours, _ = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    tabs = []
+    roi_w = roi.shape[1]
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        area = cv2.contourArea(cnt)
+        if area < 300:
+            continue
+        if bw < int(roi_w * 0.08):
+            continue
+        if not (18 <= bh <= 60):
+            continue
+        if (bw / max(1, bh)) < 2.0:
+            continue
+        tabs.append((y + bh // 2, x + bw // 2))
+
+    if len(tabs) < 4:
+        return False
+
+    # Cluster by row centre y (within ±10 px). Largest cluster must have ≥ 4 tabs.
+    tabs.sort(key=lambda t: t[0])
+    best_cluster = 1
+    i = 0
+    while i < len(tabs):
+        j = i
+        while j + 1 < len(tabs) and (tabs[j + 1][0] - tabs[i][0]) <= 10:
+            j += 1
+        best_cluster = max(best_cluster, j - i + 1)
+        i = j + 1
+
+    return best_cluster >= 4
+
+
 def is_death_screen(frame_bgr):
     """Detect death overlay by 'You Died' red text and respawn button area."""
     if frame_bgr is None or frame_bgr.size == 0:
