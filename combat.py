@@ -24,7 +24,10 @@ from config import (
     DEATH_RESPAWN_POST_CLICK_CHECK_SECONDS,
     CORNER_ESCAPE_BURST_STEP_SECONDS,
 )
-from detectors import grab_frame_bgr, is_world_map_visible, is_death_screen, is_pause_menu_visible
+from detectors import (
+    grab_frame_bgr, is_world_map_visible, is_death_screen,
+    is_pause_menu_visible, is_options_menu_visible,
+)
 from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
@@ -603,6 +606,12 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         left_click_at(vote_x, y_i, hold_time=0.08)
         if not sleep_interruptible(0.12):
             return False
+        post_frame = grab_frame_bgr(sct, full_mon)
+        if is_options_menu_visible(post_frame):
+            print("[RST] click landed on Options — ESC back to pause menu")
+            tap_key('esc', hold_time=0.12)
+            if not sleep_interruptible(0.55):
+                return False
     return True
 
 
@@ -645,6 +654,13 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
         left_click_at(cx, cy, hold_time=0.08)
         if not sleep_interruptible(0.12):
             return False
+        post_frame = grab_frame_bgr(sct, full_mon)
+        if is_options_menu_visible(post_frame):
+            print("[RST] fallback click landed on Options — ESC back to pause menu")
+            tap_key('esc', hold_time=0.12)
+            if not sleep_interruptible(0.55):
+                return False
+            continue
         tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.06)
         if not sleep_interruptible(MAP_OPEN_DELAY_SECONDS):
             return False
