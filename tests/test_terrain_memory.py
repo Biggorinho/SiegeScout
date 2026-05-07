@@ -66,7 +66,7 @@ def test_terrain_memory_no_crash_on_two_updates():
     tm = TerrainMemory()
     frame = np.zeros((64, 64, 3), dtype=np.uint8)
     frame[:, :] = (30, 30, 30)
-    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+    with patch("state._explore.build_raw_walkable_minimap_mask", return_value=fake_mask):
         tm.update(frame)  # first frame — sets _prev_gray
         tm.update(frame)  # second frame — runs phaseCorrelate + warpAffine
     assert tm._prev_gray is not None
@@ -88,7 +88,7 @@ def test_terrain_memory_scroll_shifts_known_walkable():
     frame2[20:44, 10:35] = 80
 
     fake_mask = np.zeros((h, w), dtype=np.uint8)
-    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+    with patch("state._explore.build_raw_walkable_minimap_mask", return_value=fake_mask):
         tm.update(frame1)
         # Set a sentinel pixel at a known position in _known_walkable
         sentinel = np.zeros((h, w), dtype=np.uint8)
@@ -120,7 +120,7 @@ def test_terrain_memory_phasecorrelate_skipped_on_identical_frames():
     fake_mask = np.zeros((h, w), dtype=np.uint8)
 
     tm = TerrainMemory()
-    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+    with patch("state._explore.build_raw_walkable_minimap_mask", return_value=fake_mask):
         tm.update(frame)
         sentinel = np.zeros((h, w), dtype=np.uint8)
         sentinel[32, 20] = 255
@@ -147,7 +147,7 @@ def test_terrain_memory_spatial_decay_keeps_marks_near_player():
     fake_mask = np.zeros((h, w), dtype=np.uint8)
 
     tm = TerrainMemory()
-    with patch("state.build_raw_walkable_minimap_mask", return_value=fake_mask):
+    with patch("state._explore.build_raw_walkable_minimap_mask", return_value=fake_mask):
         tm.update(frame)  # seeds _known_blocked etc.
 
         cx_pl, cy_pl = w // 2, h // 2
