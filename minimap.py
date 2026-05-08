@@ -84,6 +84,8 @@ def _build_terrain_wall_mask(minimap_bgr):
 
 def build_raw_walkable_minimap_mask(minimap_bgr):
     """Estimate walkable minimap area from the current minimap frame only."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return None
     hsv         = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
     unknown_fog = cv2.inRange(hsv, np.array([78,  80, 55]), np.array([110, 255, 255]))
     explored    = cv2.inRange(hsv, np.array([0,    0, 16]), np.array([180, 255, 255]))
