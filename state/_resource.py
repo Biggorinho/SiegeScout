@@ -46,3 +46,42 @@ class ResourceTargeter:
         """Drop the current target without adding it to visited (e.g. enemy
         pre-empts, or the dot legitimately vanished from the minimap)."""
         self._active = None
+
+    def tick(
+        self,
+        now: float,
+        center: tuple[int, int],
+        item_dots: list,
+        ore_dots: list,
+    ) -> ResourceTarget | None:
+        """Update or pick the active target. Returns the active target, or None."""
+        if self._active is None:
+            self._active = self._pick_new(now, center, item_dots, ore_dots)
+        return self._active
+
+    def _pick_new(
+        self,
+        now: float,
+        center: tuple[int, int],
+        item_dots: list,
+        ore_dots: list,
+    ) -> ResourceTarget | None:
+        for kind, dots in (("item", item_dots), ("ore", ore_dots)):
+            best = self._nearest_dot(dots, center)
+            if best is not None:
+                x, y = best
+                return ResourceTarget(
+                    pos=(int(x), int(y)),
+                    kind=kind,
+                    acquired_at=now,
+                    close_since=None,
+                )
+        return None
+
+    @staticmethod
+    def _nearest_dot(dots: list, center: tuple[int, int]) -> tuple[int, int] | None:
+        if not dots:
+            return None
+        cx, cy = center
+        best = min(dots, key=lambda d: (d[0] - cx) ** 2 + (d[1] - cy) ** 2)
+        return (int(best[0]), int(best[1]))
