@@ -193,3 +193,20 @@ def test_close_for_too_long_auto_marks_attempted():
     assert result is None
     assert len(rt._visited) == 1
     assert rt._visited[0][0] == (60, 50)
+
+
+def test_close_since_resets_when_player_walks_out_of_range():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    # Step close - close_since is set.
+    rt.tick(now=2.0, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+            close_threshold_px=10)
+    assert rt.active.close_since == 2.0
+    # Walk far away - counter must reset.
+    rt.tick(now=3.0, center=(10, 10), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+            close_threshold_px=10)
+    assert rt.active.close_since is None
+    # Step close again - counter restarts from the new time, NOT the original 2.0.
+    rt.tick(now=4.0, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+            close_threshold_px=10)
+    assert rt.active.close_since == 4.0
