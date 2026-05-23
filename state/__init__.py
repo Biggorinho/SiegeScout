@@ -9,6 +9,7 @@ Submodule layout:
     _explore  — ExploreHeatMap, SectorTracker, TerrainMemory, ExploreNavigator,
                 TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX
     _combat   — CompanionSuppressor, EnemyChaser
+    _resource — ResourceTargeter, ResourceTarget
 """
 
 from enum import Enum
@@ -30,3 +31,4 @@ from state._explore import (
     TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX,
 )
 from state._combat import CompanionSuppressor, EnemyChaser
+from state._resource import ResourceTargeter, ResourceTarget

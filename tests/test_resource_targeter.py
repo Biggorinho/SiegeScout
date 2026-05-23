@@ -210,3 +210,9 @@ def test_close_since_resets_when_player_walks_out_of_range():
     rt.tick(now=4.0, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
             close_threshold_px=10)
     assert rt.active.close_since == 4.0
+
+
+def test_resource_targeter_reexported_from_state_package():
+    from state import ResourceTargeter as Re_RT, ResourceTarget as Re_RTgt
+    assert Re_RT is ResourceTargeter
+    assert Re_RTgt is ResourceTarget
