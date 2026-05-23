@@ -65,6 +65,12 @@ from config import (
     MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
     MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
+    ENABLE_DEBUG_SNAPSHOTS,
+    DEBUG_DIR,
+    DEBUG_PERIODIC_INTERVAL_SECONDS,
+    DEBUG_MAX_FILES,
+    DEBUG_EVENT_RATE_LIMIT_SECONDS,
+    DEBUG_MOSAIC_PANEL_HEIGHT_PX,
 )
 from detectors import (
     classify_enemy_dots, get_hp_percent,
@@ -102,6 +108,7 @@ from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map,
 )
+from debug_utils import DebugRecorder
 
 
 def run(
@@ -110,11 +117,13 @@ def run(
     enable_rightclick_skill=None, rightclick_cooldown=None,
     enable_key3_skill=None, key3_cooldown=None,
     enable_movement_ability=None, movement_ability_cooldown=None,
+    enable_debug_snapshots=None,
 ):
     import config as _cfg
     _enable_death_handling   = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
     _enable_mining           = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
     _enable_loot_items       = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
+    _enable_debug_snapshots  = _cfg.ENABLE_DEBUG_SNAPSHOTS if enable_debug_snapshots is None else enable_debug_snapshots
     _enable_buff_shield  = _cfg.ENABLE_BUFF_SHIELD_SKILL if enable_rightclick_skill is None else enable_rightclick_skill
     _buff_shield_key     = _cfg.BUFF_SHIELD_KEY
     _buff_shield_cd      = ATTACK_RIGHTCLICK_INTERVAL_SECONDS if rightclick_cooldown is None else rightclick_cooldown
@@ -167,6 +176,15 @@ def run(
         spot_match_radius_px=MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
         close_attempt_seconds=MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
     )
+    debug_recorder               = DebugRecorder(
+        enabled=_enable_debug_snapshots,
+        debug_dir=DEBUG_DIR,
+        periodic_interval=DEBUG_PERIODIC_INTERVAL_SECONDS,
+        max_files=DEBUG_MAX_FILES,
+        event_rate_limit_seconds=DEBUG_EVENT_RATE_LIMIT_SECONDS,
+        panel_height=DEBUG_MOSAIC_PANEL_HEIGHT_PX,
+    )
+    last_periodic_debug_t        = 0.0
     enemy_chaser                 = EnemyChaser()
     sector_tracker               = SectorTracker()
     escape_committed_until       = 0.0
@@ -403,6 +421,25 @@ def run(
 
         while True:
             now_loop = time.time()
+
+            # Periodic debug snapshot — recorder gates by interval.
+            if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:
+                _periodic_frame    = locals().get("frame")
+                _periodic_minimap  = locals().get("minimap")
+                _periodic_center   = locals().get("center", (0, 0))
+                if _periodic_frame is not None and _periodic_minimap is not None:
+                    debug_recorder.force_record(
+                        now=now_loop, event="periodic",
+                        frame_bgr=_periodic_frame, minimap_bgr=_periodic_minimap,
+                        center=_periodic_center,
+                        enemy_dots=[], item_dots=[], ore_dots=[],
+                        companion_dot=None, nearest_enemy=None,
+                        resource_target=resource_targeter.active,
+                        walkable_mask=None, enemy_color_mask=None,
+                        state_label=state.name if hasattr(state, "name") else str(state),
+                        hp_percent=last_known_hp, counters_snapshot={},
+                    )
+                    last_periodic_debug_t = now_loop
 
             # ── hotkeys ───────────────────────────────────────────────────────
             if stop_event is not None and stop_event.is_set():
@@ -882,6 +919,17 @@ def run(
                 last_enemy_seen_t = time.time()
                 if state != State.ATTACK:
                     resource_targeter.release()
+                    debug_recorder.maybe_record(
+                        now=now_loop, event="enter_attack",
+                        frame_bgr=frame, minimap_bgr=minimap, center=center,
+                        enemy_dots=[(d[0], d[1], d[2], "?") for d in filtered_enemy_dots],
+                        item_dots=[], ore_dots=[],
+                        companion_dot=companion._candidate if hasattr(companion, "_candidate") else None,
+                        nearest_enemy=nearest, resource_target=resource_targeter.active,
+                        walkable_mask=cached_mask, enemy_color_mask=None,
+                        state_label="EXPLORE->ATTACK",
+                        hp_percent=hp, counters_snapshot={},
+                    )
                     print("Enemy found -> ATTACK (priority)")
                     _enter_attack_mode(now_loop, adx, ady, hold_attack=True)
                     enemy_chaser.reset()

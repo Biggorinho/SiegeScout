@@ -302,6 +302,7 @@ class BotUI(tk.Tk):
         self._death_sw = _row(opt, "Enable Death Handling", getattr(config, "ENABLE_DEATH_HANDLING", True))
         self._mining_sw = _row(opt, "Enable Mining", False, enabled=False, soon=True)
         self._loot_sw = _row(opt, "Enable Loot Items", False, enabled=False, soon=True)
+        self._debug_sw = _row(opt, "Debug Snapshots", getattr(config, "ENABLE_DEBUG_SNAPSHOTS", False))
 
         tk.Frame(opt, bg=BORDER, height=1).pack(fill=tk.X, pady=(8, 4))
 
@@ -502,6 +503,7 @@ class BotUI(tk.Tk):
             "enable_death_handling": self._death_sw.get(),
             "enable_mining": self._mining_sw.get(),
             "enable_loot_items": self._loot_sw.get(),
+            "enable_debug_snapshots": self._debug_sw.get(),
             "target_zone": None if _zone_sel == "Satanic (auto)" else _zone_sel,
             "enable_rightclick_skill":   self._rc_sw.get(),
             "rightclick_cooldown":       _cd(self._rc_cd, 10.0),
