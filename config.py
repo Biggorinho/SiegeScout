@@ -173,6 +173,15 @@ RESOURCE_COLLECT_START_DELAY_SECONDS  = 18.0
 
 LOOT_ITEMS_SCAN_INTERVAL_SECONDS      = 0.10
 LOOT_ITEMS_CLICK_INTERVAL_SECONDS     = 0.35
+
+# ── minimap-driven resource targeting ────────────────────────────────────
+ENABLE_MINIMAP_RESOURCE_TARGETING       = True
+MINIMAP_RESOURCE_PICKUP_DIST_PX         = _px(18)   # close enough on minimap to hand off
+MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS   = 12.0      # don't revisit failed spots
+MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS     = 8.0       # give up after Xs on one target
+MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX   = _px(8)    # tolerance for "same spot"
+MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-mark attempted
+
 ATTACK_TIMEOUT = 10.0
 FLEE_MAX_WAIT  = 15.0
 
