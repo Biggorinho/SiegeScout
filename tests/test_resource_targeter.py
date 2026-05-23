@@ -127,3 +127,33 @@ def test_reset_clears_everything_including_visited():
     assert len(rt._visited) == 1
     rt.reset()
     assert rt._visited == []
+
+
+def test_releases_target_when_dot_disappears_from_minimap():
+    rt = ResourceTargeter(spot_match_radius_px=8)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert rt.active is not None
+    # Next tick: no dots at all — target must drop, no visited entry.
+    result = rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    assert result is None
+    assert rt.active is None
+    assert rt._visited == []
+
+
+def test_keeps_target_through_minor_minimap_jitter():
+    rt = ResourceTargeter(spot_match_radius_px=8)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    # Same spot reported a few px off — should still be the same target.
+    result = rt.tick(now=2.0, center=(50, 50), item_dots=[[63, 52, 1, "star"]], ore_dots=[])
+    assert result is not None
+    assert result.pos == (60, 50)   # original pos kept (we don't chase jitter)
+
+
+def test_releases_target_after_max_travel_seconds():
+    rt = ResourceTargeter(max_travel_seconds=8.0, spot_match_radius_px=8)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    # Past timeout — even though the dot is still there, drop it AND remember it.
+    result = rt.tick(now=10.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert result is None
+    assert len(rt._visited) == 1
+    assert rt._visited[0][0] == (60, 50)

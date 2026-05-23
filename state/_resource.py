@@ -63,9 +63,39 @@ class ResourceTargeter:
         ore_dots: list,
     ) -> ResourceTarget | None:
         """Update or pick the active target. Returns the active target, or None."""
+        if self._active is not None:
+            self._active = self._reconfirm_or_drop(now, item_dots, ore_dots)
         if self._active is None:
             self._active = self._pick_new(now, center, item_dots, ore_dots)
         return self._active
+
+    def _reconfirm_or_drop(
+        self,
+        now: float,
+        item_dots: list,
+        ore_dots: list,
+    ) -> ResourceTarget | None:
+        target = self._active
+        assert target is not None
+
+        # Hard travel timeout — record as attempted so we don't pick it again.
+        if (now - target.acquired_at) >= self._max_travel_seconds:
+            self._visited.append((target.pos, now + self._memory_seconds))
+            return None
+
+        # Still on the minimap (within match radius)?
+        dots = item_dots if target.kind == "item" else ore_dots
+        if not self._dot_present(dots, target.pos):
+            return None  # disappeared — release without visited entry
+
+        return target
+
+    def _dot_present(self, dots: list, pos: tuple[int, int]) -> bool:
+        r2 = self._spot_match_radius_px * self._spot_match_radius_px
+        for d in dots:
+            if (int(d[0]) - pos[0]) ** 2 + (int(d[1]) - pos[1]) ** 2 <= r2:
+                return True
+        return False
 
     def _pick_new(
         self,
