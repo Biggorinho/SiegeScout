@@ -59,6 +59,12 @@ from config import (
     MINING_APPROACH_MOVE_MAX_SECONDS,
     MINING_SESSION_MEMORY_SECONDS,
     RESOURCE_COLLECT_START_DELAY_SECONDS,
+    ENABLE_MINIMAP_RESOURCE_TARGETING,
+    MINIMAP_RESOURCE_PICKUP_DIST_PX,
+    MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
+    MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
+    MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
+    MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
 )
 from detectors import (
     classify_enemy_dots, get_hp_percent,
@@ -66,6 +72,7 @@ from detectors import (
     is_pause_menu_visible, is_options_menu_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
+    classify_item_dots, classify_ore_dots,
 )
 from minimap import (
     get_minimap_region, minimap_center_from_image,
@@ -78,7 +85,7 @@ from pathfinding import (
     choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
     minimap_explore_target,
 )
-from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator
+from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator, ResourceTargeter
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
@@ -154,6 +161,12 @@ def run(
     last_backtrack_t             = [0.0]
     explore_heatmap              = ExploreHeatMap()
     explore_navigator            = ExploreNavigator()
+    resource_targeter            = ResourceTargeter(
+        memory_seconds=MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
+        max_travel_seconds=MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
+        spot_match_radius_px=MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
+        close_attempt_seconds=MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
+    )
     enemy_chaser                 = EnemyChaser()
     sector_tracker               = SectorTracker()
     escape_committed_until       = 0.0
@@ -279,6 +292,7 @@ def run(
         vote_reset_fail_streak = 0
         vote_reset_lockout_until = 0.0
         explore_navigator.reset()
+        resource_targeter.reset()
 
     def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
         nonlocal state, state_start, hard_stuck_since, escape_committed_until
@@ -867,6 +881,7 @@ def run(
                 last_flee_dir  = (-adx, -ady)
                 last_enemy_seen_t = time.time()
                 if state != State.ATTACK:
+                    resource_targeter.release()
                     print("Enemy found -> ATTACK (priority)")
                     _enter_attack_mode(now_loop, adx, ady, hold_attack=True)
                     enemy_chaser.reset()
@@ -895,6 +910,34 @@ def run(
                     zone_had_attack
                     or (now_loop - zone_started_t) >= RESOURCE_COLLECT_START_DELAY_SECONDS
                 )
+
+                # ── minimap-driven resource targeting ─────────────────────
+                # Picks a star/pickaxe on the minimap, walks toward it via A*,
+                # then hands off to the on-screen handlers below for the final
+                # F-press / QTE step.
+                if ENABLE_MINIMAP_RESOURCE_TARGETING and (_enable_mining or _enable_loot_items) \
+                        and resource_collect_allowed and not confirmed_enemy_now:
+                    qte_active = detect_mining_qte_window(frame).get("active", False)
+                    if not qte_active:
+                        rt_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
+                        rt_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        rt_target = resource_targeter.tick(
+                            now=now_loop,
+                            center=center,
+                            item_dots=rt_item_dots,
+                            ore_dots=rt_ore_dots,
+                            close_threshold_px=MINIMAP_RESOURCE_PICKUP_DIST_PX,
+                        )
+                        if rt_target is not None and \
+                                not resource_targeter.is_close(center, MINIMAP_RESOURCE_PICKUP_DIST_PX):
+                            rt_waypoint = _a_star_next_waypoint(cached_mask, center, rt_target.pos)
+                            if rt_waypoint is not None:
+                                rt_dx, rt_dy = dot_to_screen_delta(rt_waypoint, center)
+                                wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
+                                sleep_interruptible(0.03)
+                                continue
+                        # If target is None or already close, fall through to
+                        # the existing on-screen handlers below.
 
                 if _enable_mining and resource_collect_allowed and not confirmed_enemy_now:
                     qte = detect_mining_qte_window(frame)
@@ -971,6 +1014,7 @@ def run(
                             )
                             if (now_loop - last_loot_items_click_t) >= LOOT_ITEMS_CLICK_INTERVAL_SECONDS:
                                 left_click_at(int(tx), int(ty), hold_time=0.05)
+                                tap_key('f', hold_time=0.04)
                                 last_loot_items_click_t = now_loop
                             sleep_interruptible(0.03)
                             continue
