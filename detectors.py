@@ -419,6 +419,22 @@ def find_enemy_dots(minimap_bgr):
     return [(x, y) for x, y, _, _ in classify_enemy_dots(minimap_bgr)]
 
 
+def build_enemy_color_mask(minimap_bgr):
+    """Return a single-channel mask = bitwise-OR of all enemy-tier HSV masks.
+
+    Used by the debug recorder to show what the enemy color detector "sees" —
+    skull (low-sat bright), yellow, purple, and red ranges combined."""
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return None
+    hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+    r1    = cv2.inRange(hsv, np.array([0,   120, 110]), np.array([10,  255, 255]))
+    r2    = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
+    p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
+    y     = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
+    skull = cv2.inRange(hsv, np.array([0, 0, 138]),     np.array([180, 65, 255]))
+    return cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(r1, r2), cv2.bitwise_or(p, y)), skull)
+
+
 def get_hp_percent(frame_bgr):
     """Return HP as 0.0–1.0, or None if the HP bar is not visible."""
     if frame_bgr is None or frame_bgr.size == 0:
