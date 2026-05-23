@@ -182,6 +182,23 @@ MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS     = 8.0       # give up after Xs on one ta
 MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX   = _px(8)    # tolerance for "same spot"
 MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-mark attempted
 
+# ── debug snapshots + detection telemetry ────────────────────────────────
+ENABLE_DEBUG_SNAPSHOTS              = False
+DEBUG_DIR                           = "debug"
+DEBUG_PERIODIC_INTERVAL_SECONDS     = 5.0
+DEBUG_MAX_FILES                     = 500
+DEBUG_EVENT_RATE_LIMIT_SECONDS      = 1.5
+DEBUG_MOSAIC_PANEL_HEIGHT_PX        = 360
+
+ENEMY_DOT_CONFIRM_THRESHOLD         = 2
+ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)
+ITEM_DOT_CONFIRM_THRESHOLD          = 2
+ITEM_DOT_MATCH_RADIUS_PX            = _px(8)
+ORE_DOT_CONFIRM_THRESHOLD           = 2
+ORE_DOT_MATCH_RADIUS_PX             = _px(8)
+DOT_CONFIDENCE_DECAY_PER_MISS       = 1
+DOT_CONFIDENCE_MAX                  = 8
+
 ATTACK_TIMEOUT = 10.0
 FLEE_MAX_WAIT  = 15.0
 
