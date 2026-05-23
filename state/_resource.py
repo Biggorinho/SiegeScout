@@ -61,13 +61,52 @@ class ResourceTargeter:
         center: tuple[int, int],
         item_dots: list,
         ore_dots: list,
+        close_threshold_px: int | None = None,
     ) -> ResourceTarget | None:
-        """Update or pick the active target. Returns the active target, or None."""
+        """Update or pick the active target. Returns the active target, or None.
+
+        When `close_threshold_px` is given, the targeter also tracks how long the
+        player has been within that radius and auto-marks the target attempted
+        after `close_attempt_seconds`.
+        """
         if self._active is not None:
             self._active = self._reconfirm_or_drop(now, item_dots, ore_dots)
+
+        if self._active is not None and close_threshold_px is not None:
+            self._update_close_since(now, center, close_threshold_px)
+            # _update_close_since may have nulled self._active via auto-attempt.
+
         if self._active is None:
             self._active = self._pick_new(now, center, item_dots, ore_dots)
         return self._active
+
+    def is_close(self, center: tuple[int, int], threshold_px: int) -> bool:
+        if self._active is None:
+            return False
+        dx = self._active.pos[0] - center[0]
+        dy = self._active.pos[1] - center[1]
+        return (dx * dx + dy * dy) <= (threshold_px * threshold_px)
+
+    def _update_close_since(
+        self,
+        now: float,
+        center: tuple[int, int],
+        threshold_px: int,
+    ) -> None:
+        target = self._active
+        assert target is not None
+        dx = target.pos[0] - center[0]
+        dy = target.pos[1] - center[1]
+        within = (dx * dx + dy * dy) <= (threshold_px * threshold_px)
+        if within:
+            if target.close_since is None:
+                target.close_since = now
+            elif (now - target.close_since) >= self._close_attempt_seconds:
+                self._visited.append((target.pos, now + self._memory_seconds))
+                self._active = None
+        else:
+            # Walked back out of range — reset the counter.
+            target.close_since = None
 
     def _reconfirm_or_drop(
         self,

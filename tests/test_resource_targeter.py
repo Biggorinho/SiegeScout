@@ -157,3 +157,39 @@ def test_releases_target_after_max_travel_seconds():
     assert result is None
     assert len(rt._visited) == 1
     assert rt._visited[0][0] == (60, 50)
+
+
+def test_is_close_returns_false_without_target():
+    rt = ResourceTargeter()
+    assert rt.is_close(center=(50, 50), threshold_px=20) is False
+
+
+def test_is_close_uses_euclidean_distance():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    # Player at (52, 50) -> distance to (60, 50) is 8.
+    assert rt.is_close(center=(52, 50), threshold_px=10) is True
+    assert rt.is_close(center=(52, 50), threshold_px=5)  is False
+
+
+def test_close_since_set_on_first_close_tick():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert rt.active.close_since is None
+    # Player walked next to it.
+    rt.tick(now=2.0, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+            close_threshold_px=10)
+    assert rt.active.close_since == 2.0
+
+
+def test_close_for_too_long_auto_marks_attempted():
+    rt = ResourceTargeter(close_attempt_seconds=4.0)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    rt.tick(now=2.0, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+            close_threshold_px=10)
+    # 4 s later still close & dot still present -> auto-attempt.
+    result = rt.tick(now=6.5, center=(58, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[],
+                     close_threshold_px=10)
+    assert result is None
+    assert len(rt._visited) == 1
+    assert rt._visited[0][0] == (60, 50)
