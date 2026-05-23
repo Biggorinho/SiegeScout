@@ -47,6 +47,14 @@ class ResourceTargeter:
         pre-empts, or the dot legitimately vanished from the minimap)."""
         self._active = None
 
+    def mark_attempted(self, now: float) -> None:
+        """Treat the current target as a failed/attempted pickup. Stores its
+        position in visited so we don't re-select it until memory expires."""
+        if self._active is None:
+            return
+        self._visited.append((self._active.pos, now + self._memory_seconds))
+        self._active = None
+
     def tick(
         self,
         now: float,
@@ -66,8 +74,9 @@ class ResourceTargeter:
         item_dots: list,
         ore_dots: list,
     ) -> ResourceTarget | None:
+        self._prune_visited(now)
         for kind, dots in (("item", item_dots), ("ore", ore_dots)):
-            best = self._nearest_dot(dots, center)
+            best = self._nearest_unvisited(dots, center)
             if best is not None:
                 x, y = best
                 return ResourceTarget(
@@ -78,10 +87,22 @@ class ResourceTargeter:
                 )
         return None
 
-    @staticmethod
-    def _nearest_dot(dots: list, center: tuple[int, int]) -> tuple[int, int] | None:
+    def _nearest_unvisited(self, dots: list, center: tuple[int, int]) -> tuple[int, int] | None:
         if not dots:
             return None
         cx, cy = center
-        best = min(dots, key=lambda d: (d[0] - cx) ** 2 + (d[1] - cy) ** 2)
+        candidates = [d for d in dots if not self._is_visited((int(d[0]), int(d[1])))]
+        if not candidates:
+            return None
+        best = min(candidates, key=lambda d: (d[0] - cx) ** 2 + (d[1] - cy) ** 2)
         return (int(best[0]), int(best[1]))
+
+    def _is_visited(self, pos: tuple[int, int]) -> bool:
+        r2 = self._spot_match_radius_px * self._spot_match_radius_px
+        for vpos, _expires in self._visited:
+            if (vpos[0] - pos[0]) ** 2 + (vpos[1] - pos[1]) ** 2 <= r2:
+                return True
+        return False
+
+    def _prune_visited(self, now: float) -> None:
+        self._visited = [(p, exp) for (p, exp) in self._visited if exp > now]
