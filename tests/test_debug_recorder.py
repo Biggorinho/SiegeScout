@@ -113,3 +113,83 @@ def test_disk_error_disables_recorder(tmp_path, monkeypatch):
     monkeypatch.undo()
     p2 = _call(rec, now=2.0)
     assert p2 is None
+
+
+def test_mosaic_has_expected_shape(tmp_path):
+    rec = DebugRecorder(
+        enabled=True, debug_dir=str(tmp_path),
+        periodic_interval=5.0, max_files=10, event_rate_limit_seconds=0.0,
+    )
+    walkable = (np.ones((200, 200), dtype=np.uint8) * 255)
+    enemy_mask = (np.ones((200, 200), dtype=np.uint8) * 128)
+    path = rec.maybe_record(
+        now=1.0, event="enter_attack",
+        frame_bgr=_blank_frame(720, 1280),
+        minimap_bgr=_blank_minimap(200, 200),
+        center=(100, 100),
+        enemy_dots=[(50, 50, 1, "yellow")],
+        item_dots=[(70, 70, 1, "star")],
+        ore_dots=[(80, 80, 3, "pickaxe")],
+        companion_dot=(60, 60),
+        nearest_enemy=(50, 50),
+        resource_target=None,
+        walkable_mask=walkable,
+        enemy_color_mask=enemy_mask,
+        state_label="ATTACK",
+        hp_percent=0.85,
+        counters_snapshot={"attack_no_hb": 2, "enemy_lost": 1},
+    )
+    import cv2 as _cv2
+    img = _cv2.imread(path)
+    assert img is not None
+    assert img.shape[2] == 3
+    assert img.shape[0] == rec._panel_height * 2
+
+
+def test_mosaic_handles_none_masks_gracefully(tmp_path):
+    rec = DebugRecorder(
+        enabled=True, debug_dir=str(tmp_path),
+        periodic_interval=5.0, max_files=10, event_rate_limit_seconds=0.0,
+    )
+    path = rec.maybe_record(
+        now=1.0, event="enter_attack",
+        frame_bgr=_blank_frame(),
+        minimap_bgr=_blank_minimap(),
+        center=(100, 100),
+        enemy_dots=[], item_dots=[], ore_dots=[],
+        companion_dot=None, nearest_enemy=None, resource_target=None,
+        walkable_mask=None,
+        enemy_color_mask=None,
+        state_label="EXPLORE",
+        hp_percent=None,
+        counters_snapshot={},
+    )
+    assert path is not None
+    import cv2 as _cv2
+    img = _cv2.imread(path)
+    assert img is not None
+    assert img.shape[2] == 3
+
+
+def test_mosaic_build_exception_falls_back_to_full_frame(tmp_path, monkeypatch):
+    rec = DebugRecorder(
+        enabled=True, debug_dir=str(tmp_path),
+        periodic_interval=5.0, max_files=10, event_rate_limit_seconds=0.0,
+    )
+
+    def _boom(self, *args, **kwargs):
+        raise ValueError("simulated mosaic build failure")
+    monkeypatch.setattr(DebugRecorder, "_build_mosaic", _boom)
+
+    path = rec.maybe_record(
+        now=1.0, event="enter_attack",
+        frame_bgr=_blank_frame(),
+        minimap_bgr=_blank_minimap(),
+        center=(100, 100),
+        enemy_dots=[], item_dots=[], ore_dots=[],
+        companion_dot=None, nearest_enemy=None, resource_target=None,
+        walkable_mask=None, enemy_color_mask=None,
+        state_label="EXPLORE", hp_percent=None, counters_snapshot={},
+    )
+    assert path is not None
+    assert "fallback" in os.path.basename(path)
