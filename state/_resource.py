@@ -33,6 +33,7 @@ class ResourceTargeter:
         self._close_attempt_seconds = float(close_attempt_seconds)
         self._active: ResourceTarget | None = None
         self._visited: list[tuple[tuple[int, int], float]] = []
+        self.last_release_reason: str | None = None
 
     @property
     def active(self) -> ResourceTarget | None:
@@ -45,6 +46,7 @@ class ResourceTargeter:
     def release(self) -> None:
         """Drop the current target without adding it to visited (e.g. enemy
         pre-empts, or the dot legitimately vanished from the minimap)."""
+        self.last_release_reason = "released"
         self._active = None
 
     def mark_attempted(self, now: float) -> None:
@@ -53,6 +55,7 @@ class ResourceTargeter:
         if self._active is None:
             return
         self._visited.append((self._active.pos, now + self._memory_seconds))
+        self.last_release_reason = "attempted"
         self._active = None
 
     def tick(
@@ -103,6 +106,7 @@ class ResourceTargeter:
                 target.close_since = now
             elif (now - target.close_since) >= self._close_attempt_seconds:
                 self._visited.append((target.pos, now + self._memory_seconds))
+                self.last_release_reason = "auto_attempt"
                 self._active = None
         else:
             # Walked back out of range — reset the counter.
@@ -120,11 +124,13 @@ class ResourceTargeter:
         # Hard travel timeout — record as attempted so we don't pick it again.
         if (now - target.acquired_at) >= self._max_travel_seconds:
             self._visited.append((target.pos, now + self._memory_seconds))
+            self.last_release_reason = "timeout"
             return None
 
         # Still on the minimap (within match radius)?
         dots = item_dots if target.kind == "item" else ore_dots
         if not self._dot_present(dots, target.pos):
+            self.last_release_reason = "disappeared"
             return None  # disappeared — release without visited entry
 
         return target
@@ -148,6 +154,7 @@ class ResourceTargeter:
             best = self._nearest_unvisited(dots, center)
             if best is not None:
                 x, y = best
+                self.last_release_reason = None
                 return ResourceTarget(
                     pos=(int(x), int(y)),
                     kind=kind,

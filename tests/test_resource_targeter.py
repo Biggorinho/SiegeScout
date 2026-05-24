@@ -216,3 +216,33 @@ def test_resource_targeter_reexported_from_state_package():
     from state import ResourceTargeter as Re_RT, ResourceTarget as Re_RTgt
     assert Re_RT is ResourceTargeter
     assert Re_RTgt is ResourceTarget
+
+
+def test_release_reason_set_on_release():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    rt.release()
+    assert rt.last_release_reason == "released"
+
+
+def test_release_reason_disappeared_when_dot_gone():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    assert rt.last_release_reason == "disappeared"
+
+
+def test_release_reason_timeout_after_max_travel():
+    rt = ResourceTargeter(max_travel_seconds=2.0)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    rt.tick(now=10.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert rt.last_release_reason == "timeout"
+
+
+def test_release_reason_cleared_when_new_target_picked():
+    rt = ResourceTargeter()
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    rt.release()
+    assert rt.last_release_reason == "released"
+    rt.tick(now=2.0, center=(50, 50), item_dots=[[70, 50, 1, "star"]], ore_dots=[])
+    assert rt.last_release_reason is None
