@@ -11,11 +11,12 @@ from pathfinding import adaptive_walkable_mask
 
 
 def _open_minimap(h=64, w=64):
-    """Bright synthetic frame the walkable-mask builder accepts as walkable.
+    """Saturated synthetic frame the walkable-mask builder accepts as walkable.
 
-    See test_minimap.py for why V>190 sidesteps the linework gate.
+    See test_minimap.py for why a high-saturation colour escapes the
+    linework wall gate (which requires S<=70).
     """
-    return np.full((h, w, 3), 240, dtype=np.uint8)
+    return np.full((h, w, 3), (40, 60, 100), dtype=np.uint8)
 
 
 def test_returns_none_for_none_input():

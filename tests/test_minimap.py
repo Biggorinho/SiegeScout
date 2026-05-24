@@ -131,14 +131,16 @@ def test_get_minimap_region_unknown_mode_falls_back_to_small():
 # ── walkable mask construction ────────────────────────────────────────────
 
 
-def _open_minimap(h=64, w=64, value=240):
+def _open_minimap(h=64, w=64, bgr=(40, 60, 100)):
     """Synthetic minimap that's almost entirely walkable.
 
-    Uses a uniform bright value (>190) so the frame falls outside the
-    `_build_terrain_wall_mask` linework hue/value gate, and is uniform
-    enough that Canny edge detection finds nothing.
+    Uses a uniform saturated colour (e.g. brown BGR=40,60,100 → HSV≈
+    (15, 160, 100)) so the frame is bright enough to count as explored
+    (V>=16) but saturated enough to escape the linework wall gate
+    (which requires S<=70). Uniform colour also means Canny finds no
+    edges.
     """
-    return np.full((h, w, 3), value, dtype=np.uint8)
+    return np.full((h, w, 3), bgr, dtype=np.uint8)
 
 
 def test_build_raw_walkable_minimap_mask_yields_walkable_area():

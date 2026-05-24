@@ -70,10 +70,17 @@ def _build_terrain_wall_mask(minimap_bgr):
     hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY)
 
-    # Cyan is fog/unknown territory, so it stays walkable. We only block the thin
-    # low-saturation map strokes that act like terrain walls.
-    linework = cv2.inRange(hsv, np.array([0, 0, 25]), np.array([180, 115, 190]))
-    edges    = cv2.Canny(gray, 35, 110)
+    # Two wall categories:
+    #   1) Mid-grey linework (dim strokes, low S, mid V) — the original heuristic
+    #      but narrowed to avoid overlap with cyan fog (S>=80) which must stay
+    #      walkable.
+    #   2) Bright structures (grave markers, buildings, fences) — high V, low S.
+    #      These were missed by the old V<=190 cap.
+    linework_dim    = cv2.inRange(hsv, np.array([0, 0,  25]), np.array([180, 70, 190]))
+    linework_bright = cv2.inRange(hsv, np.array([0, 0, 180]), np.array([180, 70, 255]))
+    linework = cv2.bitwise_or(linework_dim, linework_bright)
+    # Lower Canny low-threshold so faint structure edges are picked up too.
+    edges    = cv2.Canny(gray, 25, 110)
 
     wall_mask = cv2.bitwise_or(linework, edges)
     wall_mask = cv2.morphologyEx(wall_mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
