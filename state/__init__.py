@@ -5,11 +5,13 @@ callers (main.py, tests) work unchanged. New code is encouraged to import
 directly from the relevant submodule.
 
 Submodule layout:
-    _stuck    — StuckDetector, IntentStuckDetector
-    _explore  — ExploreHeatMap, SectorTracker, TerrainMemory, ExploreNavigator,
-                TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX
-    _combat   — CompanionSuppressor, EnemyChaser
-    _resource — ResourceTargeter, ResourceTarget
+    _stuck                — StuckDetector, IntentStuckDetector
+    _explore              — ExploreHeatMap, SectorTracker, TerrainMemory, ExploreNavigator,
+                            TERRAIN_BLOCKED_DECAY_KEEP_RADIUS_PX
+    _combat               — CompanionSuppressor, EnemyChaser
+    _resource             — ResourceTargeter, ResourceTarget
+    _detection_counters   — DetectionCounters
+    _temporal_confidence  — TemporalDotConfidence
 """
 
 from enum import Enum
@@ -32,3 +34,5 @@ from state._explore import (
 )
 from state._combat import CompanionSuppressor, EnemyChaser
 from state._resource import ResourceTargeter, ResourceTarget
+from state._detection_counters import DetectionCounters
+from state._temporal_confidence import TemporalDotConfidence

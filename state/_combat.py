@@ -100,6 +100,13 @@ class CompanionSuppressor:
         return None
 
     def filter(self, dots):
+        return self._suppress(dots)
+
+    def filter_resources(self, item_dots, ore_dots):
+        """Apply companion suppression to 4-tuple resource-dot lists."""
+        return self._suppress(item_dots), self._suppress(ore_dots)
+
+    def _suppress(self, dots):
         if self._candidate is None or self._hits < self.confirm_frames:
             return dots
         return [d for d in dots if dot_distance(d, self._candidate) > self.suppress_radius]
