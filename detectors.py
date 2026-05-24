@@ -652,6 +652,34 @@ def is_options_menu_visible(frame_bgr):
     return best_cluster >= 4
 
 
+def is_inventory_panel_visible(frame_bgr):
+    """Detect any in-game UI panel that exposes the right-side inventory.
+
+    Crafting bench, merchant, stash, plain inventory hotkey — they all open
+    the same inventory panel on the right of the screen and show the yellow
+    keybinding legend across the very bottom (LMB / RMB / SHIFT / etc.).
+    That gold-text band is rarely present during normal gameplay (the
+    minimap occupies the top-right and the bottom-right shows the game
+    world), so it's a reliable signature. ESC closes any of these panels.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+
+    h, w = frame_bgr.shape[:2]
+    # Bottom band where the keybinding legend prints in gold text.
+    x0, x1 = int(w * 0.55), w
+    y0, y1 = int(h * 0.94), int(h * 0.995)
+    roi = frame_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    # Gold/yellow text — narrow hue, mid-to-high saturation, bright.
+    yellow = cv2.inRange(hsv, np.array([18, 80, 130]), np.array([45, 255, 255]))
+    yellow_ratio = float(np.count_nonzero(yellow)) / yellow.size
+    return yellow_ratio > 0.015
+
+
 def is_death_screen(frame_bgr):
     """Detect death overlay by 'You Died' red text and respawn button area."""
     if frame_bgr is None or frame_bgr.size == 0:

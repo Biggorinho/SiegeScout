@@ -82,7 +82,7 @@ from config import (
 from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible,
-    is_pause_menu_visible, is_options_menu_visible,
+    is_pause_menu_visible, is_options_menu_visible, is_inventory_panel_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
     classify_item_dots, classify_ore_dots,
@@ -644,6 +644,12 @@ def run(
                     continue
                 if is_pause_menu_visible(frame):
                     print("[MENU] pause menu detected — ESC")
+                    auto_esc_ignore_until      = time.time() + 1.0
+                    tap_key('esc', hold_time=0.12)
+                    menu_escape_cooldown_until = now_loop + 0.8
+                    continue
+                if is_inventory_panel_visible(frame):
+                    print("[MENU] inventory/interface panel detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
