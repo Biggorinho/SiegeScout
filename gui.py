@@ -53,13 +53,44 @@ def _asset(name: str) -> str:
 
 
 class _QueueWriter(io.TextIOBase):
-    def __init__(self, q: queue.Queue):
+    """Captures writes into the GUI queue AND (optionally) appends them to
+    a log file with ISO-8601 timestamp prefixes for downstream analysis."""
+
+    def __init__(self, q: queue.Queue, log_file=None):
         self._q = q
+        self._log_file = log_file
+        self._line_start = True
 
     def write(self, text: str) -> int:
-        if text:
-            self._q.put(text)
+        if not text:
+            return 0
+        self._q.put(text)
+        if self._log_file is not None:
+            try:
+                self._write_to_log(text)
+            except OSError:
+                # Disk error — disable file logging silently to avoid spamming
+                # the GUI; the in-memory queue still works.
+                self._log_file = None
         return len(text)
+
+    def _write_to_log(self, text: str):
+        # Prefix each new line with an ISO-8601 timestamp.
+        import datetime
+        i = 0
+        while i < len(text):
+            if self._line_start:
+                ts = datetime.datetime.now().isoformat(timespec="milliseconds")
+                self._log_file.write(f"{ts}  ")
+                self._line_start = False
+            nl = text.find("\n", i)
+            if nl < 0:
+                self._log_file.write(text[i:])
+                break
+            self._log_file.write(text[i:nl + 1])
+            self._line_start = True
+            i = nl + 1
+        self._log_file.flush()
 
     def flush(self):
         return None
@@ -488,8 +519,20 @@ class BotUI(tk.Tk):
         import main as _main
 
         self._stop_event = threading.Event()
-        sys.stdout = _QueueWriter(self._log_queue)
-        sys.stderr = _QueueWriter(self._log_queue)
+        # Open the analyzer log alongside the GUI queue (best-effort).
+        try:
+            import os as _os
+            _log_dir = "debug"
+            _os.makedirs(_log_dir, exist_ok=True)
+            self._bot_log_file = open(_os.path.join(_log_dir, "bot.log"), "a", encoding="utf-8")
+            self._bot_log_file.write(
+                f"\n===== Bot session started {__import__('datetime').datetime.now().isoformat(timespec='seconds')} =====\n"
+            )
+            self._bot_log_file.flush()
+        except OSError:
+            self._bot_log_file = None
+        sys.stdout = _QueueWriter(self._log_queue, log_file=self._bot_log_file)
+        sys.stderr = _QueueWriter(self._log_queue, log_file=self._bot_log_file)
 
         def _cd(sv, default):
             try:
@@ -551,6 +594,12 @@ class BotUI(tk.Tk):
     def _on_bot_finished(self):
         sys.stdout = self._orig_stdout
         sys.stderr = self._orig_stderr
+        if getattr(self, "_bot_log_file", None) is not None:
+            try:
+                self._bot_log_file.close()
+            except OSError:
+                pass
+            self._bot_log_file = None
         self._cta.set_style("▶  Start Bot", bg=GREEN, fg="#14341b", hover_bg="#b8ecb4")
         self._status_lbl.config(text="Idle", fg=FG_MUTE)
         self._pulse.set(alive=False, color=FG_MUTE)
@@ -639,6 +688,12 @@ class BotUI(tk.Tk):
             self._bot_thread.join(timeout=1.5)
         sys.stdout = self._orig_stdout
         sys.stderr = self._orig_stderr
+        if getattr(self, "_bot_log_file", None) is not None:
+            try:
+                self._bot_log_file.close()
+            except OSError:
+                pass
+            self._bot_log_file = None
         self.destroy()
 
 
