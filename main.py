@@ -79,6 +79,7 @@ from detectors import (
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
     classify_item_dots, classify_ore_dots,
+    build_enemy_color_mask,
 )
 from minimap import (
     get_minimap_region, minimap_center_from_image,
@@ -421,25 +422,6 @@ def run(
 
         while True:
             now_loop = time.time()
-
-            # Periodic debug snapshot — recorder gates by interval.
-            if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:
-                _periodic_frame    = locals().get("frame")
-                _periodic_minimap  = locals().get("minimap")
-                _periodic_center   = locals().get("center", (0, 0))
-                if _periodic_frame is not None and _periodic_minimap is not None:
-                    debug_recorder.force_record(
-                        now=now_loop, event="periodic",
-                        frame_bgr=_periodic_frame, minimap_bgr=_periodic_minimap,
-                        center=_periodic_center,
-                        enemy_dots=[], item_dots=[], ore_dots=[],
-                        companion_dot=None, nearest_enemy=None,
-                        resource_target=resource_targeter.active,
-                        walkable_mask=None, enemy_color_mask=None,
-                        state_label=state.name if hasattr(state, "name") else str(state),
-                        hp_percent=last_known_hp, counters_snapshot={},
-                    )
-                    last_periodic_debug_t = now_loop
 
             # ── hotkeys ───────────────────────────────────────────────────────
             if stop_event is not None and stop_event.is_set():
@@ -912,6 +894,27 @@ def run(
                 rightclick_busy_until    = time.time() + 0.35
                 next_attack_rightclick_t = now_loop + _buff_shield_cd
 
+            # Build debug enemy color mask once per frame (only when snapshots enabled).
+            _dbg_enemy_mask = build_enemy_color_mask(minimap) if _enable_debug_snapshots else None
+            _dbg_companion  = companion._candidate if hasattr(companion, "_candidate") else None
+            _dbg_item_dots  = classify_item_dots(minimap)  if _enable_debug_snapshots else []
+            _dbg_ore_dots   = classify_ore_dots(minimap)   if _enable_debug_snapshots else []
+
+            # Periodic debug snapshot — at this point all detection state is available.
+            if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:
+                debug_recorder.force_record(
+                    now=now_loop, event="periodic",
+                    frame_bgr=frame, minimap_bgr=minimap, center=center,
+                    enemy_dots=filtered_enemy_dots,
+                    item_dots=_dbg_item_dots, ore_dots=_dbg_ore_dots,
+                    companion_dot=_dbg_companion, nearest_enemy=nearest,
+                    resource_target=resource_targeter.active,
+                    walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                    state_label=state.name if hasattr(state, "name") else str(state),
+                    hp_percent=hp, counters_snapshot={},
+                )
+                last_periodic_debug_t = now_loop
+
             # ── enemy triggers ATTACK state ───────────────────────────────────
             if state != State.FLEE and confirmed_enemy_now and nearest:
                 adx, ady       = dot_to_screen_delta(nearest, center)
@@ -923,10 +926,10 @@ def run(
                         now=now_loop, event="enter_attack",
                         frame_bgr=frame, minimap_bgr=minimap, center=center,
                         enemy_dots=[(d[0], d[1], d[2], "?") for d in filtered_enemy_dots],
-                        item_dots=[], ore_dots=[],
-                        companion_dot=companion._candidate if hasattr(companion, "_candidate") else None,
+                        item_dots=_dbg_item_dots, ore_dots=_dbg_ore_dots,
+                        companion_dot=_dbg_companion,
                         nearest_enemy=nearest, resource_target=resource_targeter.active,
-                        walkable_mask=cached_mask, enemy_color_mask=None,
+                        walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
                         state_label="EXPLORE->ATTACK",
                         hp_percent=hp, counters_snapshot={},
                     )
