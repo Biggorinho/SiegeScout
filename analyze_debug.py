@@ -136,3 +136,92 @@ def parse_log_lines(lines: list[str]) -> dict:
         "session_start_ts": session_start_ts,
         "session_end_ts": session_end_ts,
     }
+
+
+import math
+import os
+
+
+def aggregate_counters(zones: list[dict]) -> dict:
+    """Return {counter_name: {total, mean, max, count_zones, values}}."""
+    if not zones:
+        return {}
+    by_name: dict[str, list[int]] = {}
+    for z in zones:
+        for k, v in z.get("counters", {}).items():
+            by_name.setdefault(k, []).append(int(v))
+    result = {}
+    n = len(zones)
+    for name, values in by_name.items():
+        # Pad missing zones with zeros so the mean reflects the full session.
+        padded = values + [0] * (n - len(values))
+        total = sum(padded)
+        result[name] = {
+            "total": total,
+            "mean": total / n,
+            "max": max(padded),
+            "count_zones": n,
+            "values": padded,
+        }
+    return result
+
+
+def find_outliers(zones: list[dict], counter: str) -> list[tuple[int, int, str]]:
+    """Return [(zone_index, value, zone_name), ...] for zones where the named
+    counter is > max(mean + 1.5*stdev, 5). Sorted by value descending."""
+    n = len(zones)
+    if n == 0:
+        return []
+    values = [int(z.get("counters", {}).get(counter, 0)) for z in zones]
+    mean = sum(values) / n
+    # Population std-dev (n divisor, not n-1 - fewer zones, stable enough).
+    var = sum((v - mean) ** 2 for v in values) / n
+    std = math.sqrt(var)
+    threshold = max(mean + 1.5 * std, 5)
+    out = []
+    for i, v in enumerate(values):
+        if v > threshold:
+            out.append((i, v, zones[i].get("name", f"zone {i}")))
+    out.sort(key=lambda t: -t[1])
+    return out
+
+
+# Snapshot filename pattern: <event>_<unix_ms>.png
+# Where <event> may contain underscores (e.g. "qte_miss_fallback") so we
+# split on the LAST underscore that precedes the digits-only ms timestamp.
+_SNAP_RE = re.compile(r"^(?P<event>.+)_(?P<ms>\d+)\.png$")
+
+
+def list_snapshots(debug_dir: str) -> list[dict]:
+    """Return [{event, unix_ms, path}, ...] sorted by unix_ms ascending."""
+    if not os.path.isdir(debug_dir):
+        return []
+    out = []
+    for name in os.listdir(debug_dir):
+        m = _SNAP_RE.match(name)
+        if not m:
+            continue
+        out.append({
+            "event": m.group("event"),
+            "unix_ms": int(m.group("ms")),
+            "path": os.path.join(debug_dir, name).replace("\\", "/"),
+        })
+    out.sort(key=lambda d: d["unix_ms"])
+    return out
+
+
+def map_snapshots_to_zones(zones: list[dict], snapshots: list[dict]) -> dict:
+    """Return {zone_index: [snapshot_dict, ...]} based on unix_ms in
+    [zone.start_ms, zone.end_ms]. Zones without a start_ms/end_ms are
+    skipped (the caller is responsible for converting ISO ts -> unix_ms)."""
+    out: dict[int, list[dict]] = {i: [] for i in range(len(zones))}
+    for snap in snapshots:
+        for i, z in enumerate(zones):
+            s = z.get("start_ms")
+            e = z.get("end_ms")
+            if s is None or e is None:
+                continue
+            if s <= snap["unix_ms"] <= e:
+                out[i].append(snap)
+                break
+    return out

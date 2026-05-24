@@ -4,6 +4,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from analyze_debug import parse_cnt_line, split_sessions, parse_log_lines
+from analyze_debug import (
+    aggregate_counters, find_outliers,
+    list_snapshots, map_snapshots_to_zones,
+)
 
 
 def test_parse_cnt_line_returns_dict_with_all_six_counters():
@@ -86,3 +90,74 @@ def test_parse_log_lines_extracts_deaths_and_stucks_and_resets():
     assert len(events["deaths"]) == 1
     assert len(events["vote_resets"]) == 1
     assert len(events["vote_reset_failures"]) == 1
+
+
+def test_aggregate_counters_empty_zones_returns_zeros():
+    result = aggregate_counters([])
+    assert result == {}
+
+
+def test_aggregate_counters_sums_means_max():
+    zones = [
+        {"counters": {"a": 10, "b": 0}},
+        {"counters": {"a": 20, "b": 5}},
+        {"counters": {"a": 30, "b": 0}},
+    ]
+    result = aggregate_counters(zones)
+    assert result["a"]["total"] == 60
+    assert result["a"]["mean"] == 20.0
+    assert result["a"]["max"] == 30
+    assert result["a"]["count_zones"] == 3
+    assert result["b"]["total"] == 5
+    assert result["b"]["max"] == 5
+
+
+def test_find_outliers_flags_zones_above_mean_plus_1_5_sigma_and_5():
+    # Counter "x" values across zones: 0, 0, 0, 0, 50 -> mean=10, std~=20
+    # threshold = max(mean + 1.5*std, 5) -> ~40
+    # 50 > 40 -> outlier (zone index 4).
+    zones = [
+        {"name": f"z{i}", "counters": {"x": v}}
+        for i, v in enumerate([0, 0, 0, 0, 50])
+    ]
+    outliers = find_outliers(zones, counter="x")
+    assert len(outliers) == 1
+    assert outliers[0][0] == 4   # zone index
+    assert outliers[0][1] == 50
+
+
+def test_find_outliers_skips_small_counter_values_under_5():
+    # If everything is 0-3, no outlier even if one is statistically high.
+    zones = [{"counters": {"x": v}} for v in [0, 0, 0, 0, 3]]
+    outliers = find_outliers(zones, counter="x")
+    assert outliers == []
+
+
+def test_list_snapshots_reads_filenames_with_event_and_ms_timestamp(tmp_path):
+    (tmp_path / "enter_attack_1779568283961.png").write_bytes(b"")
+    (tmp_path / "periodic_1779568289663.png").write_bytes(b"")
+    (tmp_path / "qte_miss_fallback_1779568300000.png").write_bytes(b"")
+    (tmp_path / "ignore_me.txt").write_text("not a png")
+    snaps = list_snapshots(str(tmp_path))
+    assert len(snaps) == 3
+    # Sorted by timestamp ascending.
+    assert snaps[0]["event"] == "enter_attack"
+    assert snaps[0]["unix_ms"] == 1779568283961
+    # "qte_miss_fallback" - event name is everything before the trailing _<ms>.
+    assert snaps[2]["event"] == "qte_miss_fallback"
+
+
+def test_map_snapshots_to_zones_assigns_each_snapshot_to_zone_by_timespan():
+    # Two zones: [1000, 2000] and [2500, 3500] (in unix ms).
+    zones = [
+        {"name": "z1", "start_ms": 1000, "end_ms": 2000},
+        {"name": "z2", "start_ms": 2500, "end_ms": 3500},
+    ]
+    snaps = [
+        {"event": "a", "unix_ms": 1500, "path": "a.png"},   # in z1
+        {"event": "b", "unix_ms": 2700, "path": "b.png"},   # in z2
+        {"event": "c", "unix_ms": 5000, "path": "c.png"},   # outside both
+    ]
+    mapping = map_snapshots_to_zones(zones, snaps)
+    assert len(mapping[0]) == 1 and mapping[0][0]["path"] == "a.png"
+    assert len(mapping[1]) == 1 and mapping[1][0]["path"] == "b.png"
