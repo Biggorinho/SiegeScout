@@ -70,3 +70,12 @@ def test_reset_clears_all_state():
     t.reset()
     confirmed = t.update([[60, 50, 1, "yellow"]], now=2.0)
     assert confirmed == []   # back to conf=1
+
+
+def test_pop_dropped_unconfirmed_counts_decayed_unconfirmed_entries():
+    t = TemporalDotConfidence(match_radius_px=8, confirm_threshold=3,
+                              decay_per_miss=1)
+    t.update([[60, 50, 1, "yellow"]], now=1.0)   # conf=1
+    t.update([], now=1.1)                          # decays to 0, drop, unconfirmed
+    assert t.pop_dropped_unconfirmed_count() == 1
+    assert t.pop_dropped_unconfirmed_count() == 0   # cleared after read

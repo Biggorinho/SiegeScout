@@ -33,6 +33,7 @@ class TemporalDotConfidence:
         self._decay_per_miss = int(decay_per_miss)
         self._max_confidence = int(max_confidence)
         self._entries: dict[tuple[int, int], _Entry] = {}
+        self._dropped_unconfirmed: int = 0
 
     def update(self, dots, now: float) -> list:
         """Returns the input dots whose entry confidence is >= confirm_threshold."""
@@ -59,11 +60,23 @@ class TemporalDotConfidence:
                 continue
             self._entries[k].confidence -= self._decay_per_miss
             if self._entries[k].confidence <= 0:
+                # Count entries that never reached confirm_threshold as
+                # "unconfirmed" — useful telemetry for detection flicker.
+                if self._entries[k].confidence + self._decay_per_miss < self._confirm_threshold:
+                    self._dropped_unconfirmed += 1
                 del self._entries[k]
         return confirmed
 
     def reset(self) -> None:
         self._entries.clear()
+        self._dropped_unconfirmed = 0
+
+    def pop_dropped_unconfirmed_count(self) -> int:
+        """Returns the number of entries dropped since the last call that never
+        reached confirm_threshold. Resets the internal counter to 0 after read."""
+        n = self._dropped_unconfirmed
+        self._dropped_unconfirmed = 0
+        return n
 
     def _match(self, dot) -> tuple[int, int] | None:
         x, y = int(dot[0]), int(dot[1])
