@@ -290,7 +290,7 @@ SATANIC_FIXED_NODES = {
     name: (_px(x), _px(y)) for name, (x, y) in _SATANIC_FIXED_NODES_REF.items()
 }
 
-ZONE_TRANSITION_FREEZE_SECONDS    = 5.5
+ZONE_TRANSITION_FREEZE_SECONDS    = 3.0
 # Packet-driven early exit: zone packet shortens the freeze window once
 # MIN_FREEZE seconds have elapsed and SETTLE seconds have passed since the packet.
 ZONE_PACKET_MIN_FREEZE_SECONDS    = 1.5
