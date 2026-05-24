@@ -7,6 +7,7 @@ from config import (
     HP_BAR, PLAYER_EXCLUSION_RADIUS, PLAYER_EXCLUSION_RADIUS_FRAC,
     ITEM_MATCH_THRESHOLD, SCREEN_W, SCREEN_H,
     COMPANION_WHITE_SUPPRESS_RADIUS, COMPANION_WHITE_MIN_V, COMPANION_WHITE_MAX_S,
+    COMPANION_TRACK_RADIUS,
     SKULL_DEBUG_SAVE_REJECTED_CANDIDATES, SKULL_DEBUG_REJECTED_COOLDOWN_SECONDS,
 )
 from debug_utils import save_skull_reject_snapshot
@@ -409,6 +410,34 @@ def classify_enemy_dots(minimap_bgr):
                     break
             if keep:
                 filtered.append([ex, ey, tier, kind])
+        dots = filtered
+
+    # Always-on duck/companion safety net: yellow dots near the player center
+    # with orange-yellow pixels in their patch are almost certainly the
+    # loot-goblin duck or another orange companion sprite. Drop them even when
+    # CompanionSuppressor hasn't confirmed yet (it needs N frames; the duck
+    # damages the bot in the meantime if not suppressed immediately).
+    if dots:
+        track_radius_sq = COMPANION_TRACK_RADIUS * COMPANION_TRACK_RADIUS
+
+        def _patch_has_orange(cx, cy, patch_radius=6, min_ratio=0.05):
+            x0 = max(0, cx - patch_radius)
+            y0 = max(0, cy - patch_radius)
+            x1 = min(w, cx + patch_radius)
+            y1 = min(h, cy + patch_radius)
+            patch = hsv[y0:y1, x0:x1]
+            if patch.size == 0:
+                return False
+            orange = cv2.inRange(patch, np.array([5, 40, 60]), np.array([35, 255, 255]))
+            ratio = float(np.count_nonzero(orange)) / float(max(1, orange.size))
+            return ratio >= min_ratio
+
+        filtered = []
+        for ex, ey, tier, kind in dots:
+            if kind == "yellow" and (ex - cx0) ** 2 + (ey - cy0) ** 2 <= track_radius_sq:
+                if _patch_has_orange(ex, ey):
+                    continue
+            filtered.append([ex, ey, tier, kind])
         dots = filtered
 
     return dots
