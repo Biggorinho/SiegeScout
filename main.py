@@ -703,6 +703,13 @@ def run(
                     spin_to_clear_melee()
                     if attack_held:
                         attack_key_down()
+                    # If still below FLEE threshold after potion spam, force FLEE
+                    # rather than continuing the recovery loop — otherwise the bot
+                    # potion-spams in place while taking damage.
+                    if hp_for_potion < HP_FLEE_THRESHOLD and state != State.FLEE:
+                        print(f"[HP] still {hp_for_potion:.0%} after recovery -> FLEE")
+                        state       = State.FLEE
+                        state_start = time.time()
                     continue
                 potion_window = (
                     HEALTH_POTION_BURST_MIN_HP <= hp_for_potion <= HEALTH_POTION_BURST_MAX_HP
@@ -1190,6 +1197,17 @@ def run(
                         last_stuck_log_t = now
                         _esc_ang = math.degrees(math.atan2(explore_dy, explore_dx))
                         print(f"[STUCK] octant-escape was={_esc_ang:.0f}°")
+                        debug_recorder.maybe_record(
+                            now=now, event="stuck_octant",
+                            frame_bgr=frame, minimap_bgr=minimap, center=center,
+                            enemy_dots=filtered_enemy_dots,
+                            item_dots=_dbg_item_dots, ore_dots=_dbg_ore_dots,
+                            companion_dot=_dbg_companion, nearest_enemy=nearest,
+                            resource_target=resource_targeter.active,
+                            walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                            state_label=f"STUCK_OCT({_esc_ang:.0f}°)",
+                            hp_percent=hp, counters_snapshot=counters.snapshot(),
+                        )
                     if not confirmed_enemy_now and \
                             (now - last_stuck_count_t) >= STUCK_COUNT_EVENT_COOLDOWN_SECONDS:
                         stuck_no_enemy_count += 1
