@@ -42,7 +42,6 @@ from config import (
     ZONE_PACKET_SETTLE_SECONDS,
     DEATH_RESPAWN_COOLDOWN_SECONDS, DEATH_CONFIRM_FRAMES,
     RESPAWN_TO_RESET_DELAY_SECONDS,
-    ENEMY_CONFIRM_FRAMES, ENEMY_LOST_FRAMES,
     LAST_SEEN_MONSTER_MEMORY_SECONDS,
     COMPANION_TRACK_RADIUS,
     ATTACK_IDLE_VOTE_RESET_SECONDS,
@@ -71,6 +70,14 @@ from config import (
     DEBUG_MAX_FILES,
     DEBUG_EVENT_RATE_LIMIT_SECONDS,
     DEBUG_MOSAIC_PANEL_HEIGHT_PX,
+    ENEMY_DOT_CONFIRM_THRESHOLD,
+    ENEMY_DOT_MATCH_RADIUS_PX,
+    ITEM_DOT_CONFIRM_THRESHOLD,
+    ITEM_DOT_MATCH_RADIUS_PX,
+    ORE_DOT_CONFIRM_THRESHOLD,
+    ORE_DOT_MATCH_RADIUS_PX,
+    DOT_CONFIDENCE_DECAY_PER_MISS,
+    DOT_CONFIDENCE_MAX,
 )
 from detectors import (
     classify_enemy_dots, get_hp_percent,
@@ -92,7 +99,7 @@ from pathfinding import (
     choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
     minimap_explore_target,
 )
-from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator, ResourceTargeter
+from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator, ResourceTargeter, DetectionCounters, TemporalDotConfidence
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
@@ -186,6 +193,28 @@ def run(
         panel_height=DEBUG_MOSAIC_PANEL_HEIGHT_PX,
     )
     last_periodic_debug_t        = 0.0
+    counters                     = DetectionCounters(zone_started_at=time.time())
+    enemy_confidence             = TemporalDotConfidence(
+        match_radius_px=ENEMY_DOT_MATCH_RADIUS_PX,
+        confirm_threshold=ENEMY_DOT_CONFIRM_THRESHOLD,
+        decay_per_miss=DOT_CONFIDENCE_DECAY_PER_MISS,
+        max_confidence=DOT_CONFIDENCE_MAX,
+    )
+    item_confidence              = TemporalDotConfidence(
+        match_radius_px=ITEM_DOT_MATCH_RADIUS_PX,
+        confirm_threshold=ITEM_DOT_CONFIRM_THRESHOLD,
+        decay_per_miss=DOT_CONFIDENCE_DECAY_PER_MISS,
+        max_confidence=DOT_CONFIDENCE_MAX,
+    )
+    ore_confidence               = TemporalDotConfidence(
+        match_radius_px=ORE_DOT_MATCH_RADIUS_PX,
+        confirm_threshold=ORE_DOT_CONFIRM_THRESHOLD,
+        decay_per_miss=DOT_CONFIDENCE_DECAY_PER_MISS,
+        max_confidence=DOT_CONFIDENCE_MAX,
+    )
+    entered_attack_at            = 0.0
+    attack_no_hb_already_fired   = False
+    last_qte_in_window_press_t   = 0.0
     enemy_chaser                 = EnemyChaser()
     sector_tracker               = SectorTracker()
     escape_committed_until       = 0.0
@@ -218,8 +247,6 @@ def run(
     stuck_no_enemy_count         = 0
     last_stuck_count_t           = 0.0
     no_enemy_frames              = 0
-    enemy_visible_frames         = 0
-    enemy_lost_frames            = 0
     hard_stuck_since             = 0.0
     corner_escape_attempts       = 0
     last_corner_escape_t         = 0.0
@@ -250,6 +277,7 @@ def run(
     # ── shared reset helper ────────────────────────────────────────────────────
     # Defined as a closure so it can assign back into run()'s local scope.
     def _do_zone_reset():
+        nonlocal entered_attack_at, attack_no_hb_already_fired, last_qte_in_window_press_t
         nonlocal last_vote_reset_t, zone_transition_until, last_attack_activity_t
         nonlocal zone_had_attack, stuck_no_enemy_count, hard_stuck_since
         nonlocal corner_escape_attempts, no_enemy_frames, hp_bar_missing_until
@@ -312,6 +340,14 @@ def run(
         vote_reset_lockout_until = 0.0
         explore_navigator.reset()
         resource_targeter.reset()
+        counters.log_dump(now=time.time())
+        counters.reset(now=time.time())
+        enemy_confidence.reset()
+        item_confidence.reset()
+        ore_confidence.reset()
+        entered_attack_at = 0.0
+        attack_no_hb_already_fired = False
+        last_qte_in_window_press_t = 0.0
 
     def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
         nonlocal state, state_start, hard_stuck_since, escape_committed_until
@@ -749,16 +785,16 @@ def run(
                 else:
                     nearest = None
 
-            if nearest is not None:
-                enemy_visible_frames = min(enemy_visible_frames + 1,
-                                           ENEMY_CONFIRM_FRAMES + ENEMY_LOST_FRAMES + 6)
-                enemy_lost_frames    = 0
-            else:
-                enemy_lost_frames += 1
-                if enemy_lost_frames >= ENEMY_LOST_FRAMES:
-                    enemy_visible_frames = 0
+            # Confidence-based confirmation (replaces ENEMY_CONFIRM_FRAMES counter).
+            _confirmed_enemy_dots = enemy_confidence.update(filtered_enemy_dots, now_loop)
+            confirmed_enemy_now = bool(_confirmed_enemy_dots)
+            counters.enemy_dot_lost_before_confirm += enemy_confidence.pop_dropped_unconfirmed_count()
 
-            confirmed_enemy_now = enemy_visible_frames >= ENEMY_CONFIRM_FRAMES
+            # Build debug overlays once per frame (only when snapshots enabled).
+            _dbg_enemy_mask = build_enemy_color_mask(minimap) if _enable_debug_snapshots else None
+            _dbg_companion  = companion._candidate if hasattr(companion, "_candidate") else None
+            _dbg_item_dots  = classify_item_dots(minimap)  if _enable_debug_snapshots else []
+            _dbg_ore_dots   = classify_ore_dots(minimap)   if _enable_debug_snapshots else []
 
             if confirmed_enemy_now and nearest is not None:
                 last_seen_enemy_dot = nearest
@@ -863,6 +899,17 @@ def run(
                         (now_loop - last_corner_escape_t) >= CORNER_ESCAPE_COOLDOWN_SECONDS:
                     print(f"Hard-Stuck {hard_stuck_age:.1f}s -> Corner Escape Burst "
                           f"{corner_escape_attempts + 1}/{CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET}")
+                    debug_recorder.maybe_record(
+                        now=now_loop, event="hard_stuck",
+                        frame_bgr=frame, minimap_bgr=minimap, center=center,
+                        enemy_dots=filtered_enemy_dots,
+                        item_dots=_dbg_item_dots, ore_dots=_dbg_ore_dots,
+                        companion_dot=_dbg_companion, nearest_enemy=nearest,
+                        resource_target=resource_targeter.active,
+                        walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                        state_label="STUCK", hp_percent=hp,
+                        counters_snapshot=counters.snapshot(),
+                    )
                     if attack_held:
                         attack_key_up()
                         attack_held = False
@@ -894,12 +941,6 @@ def run(
                 rightclick_busy_until    = time.time() + 0.35
                 next_attack_rightclick_t = now_loop + _buff_shield_cd
 
-            # Build debug enemy color mask once per frame (only when snapshots enabled).
-            _dbg_enemy_mask = build_enemy_color_mask(minimap) if _enable_debug_snapshots else None
-            _dbg_companion  = companion._candidate if hasattr(companion, "_candidate") else None
-            _dbg_item_dots  = classify_item_dots(minimap)  if _enable_debug_snapshots else []
-            _dbg_ore_dots   = classify_ore_dots(minimap)   if _enable_debug_snapshots else []
-
             # Periodic debug snapshot — at this point all detection state is available.
             if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:
                 debug_recorder.force_record(
@@ -911,7 +952,7 @@ def run(
                     resource_target=resource_targeter.active,
                     walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
                     state_label=state.name if hasattr(state, "name") else str(state),
-                    hp_percent=hp, counters_snapshot={},
+                    hp_percent=hp, counters_snapshot=counters.snapshot(),
                 )
                 last_periodic_debug_t = now_loop
 
@@ -931,10 +972,12 @@ def run(
                         nearest_enemy=nearest, resource_target=resource_targeter.active,
                         walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
                         state_label="EXPLORE->ATTACK",
-                        hp_percent=hp, counters_snapshot={},
+                        hp_percent=hp, counters_snapshot=counters.snapshot(),
                     )
                     print("Enemy found -> ATTACK (priority)")
                     _enter_attack_mode(now_loop, adx, ady, hold_attack=True)
+                    entered_attack_at = now_loop
+                    attack_no_hb_already_fired = False
                     enemy_chaser.reset()
                     attack_stuck.reset()
                     _aim_cursor_toward_vector(adx, ady)
@@ -970,8 +1013,14 @@ def run(
                         and resource_collect_allowed and not confirmed_enemy_now:
                     qte_active = detect_mining_qte_window(frame).get("active", False)
                     if not qte_active:
-                        rt_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
-                        rt_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
+                        raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        # Strip the companion's symbol before resources see them.
+                        raw_item_dots, raw_ore_dots = companion.filter_resources(raw_item_dots, raw_ore_dots)
+                        # Frame-stable confirmation per kind.
+                        rt_item_dots = item_confidence.update(raw_item_dots, now_loop)
+                        rt_ore_dots  = ore_confidence.update(raw_ore_dots,  now_loop)
+                        prev_rt_active = resource_targeter.active
                         rt_target = resource_targeter.tick(
                             now=now_loop,
                             center=center,
@@ -979,6 +1028,36 @@ def run(
                             ore_dots=rt_ore_dots,
                             close_threshold_px=MINIMAP_RESOURCE_PICKUP_DIST_PX,
                         )
+                        # Resource target lifecycle telemetry.
+                        if prev_rt_active is not None and rt_target is None:
+                            reason = resource_targeter.last_release_reason
+                            if reason == "disappeared" and (now_loop - prev_rt_active.acquired_at) < 1.0:
+                                counters.resource_target_disappeared_early += 1
+                            elif reason == "timeout":
+                                counters.resource_target_timeout += 1
+                            debug_recorder.maybe_record(
+                                now=now_loop, event="resource_target_dropped",
+                                frame_bgr=frame, minimap_bgr=minimap, center=center,
+                                enemy_dots=filtered_enemy_dots,
+                                item_dots=raw_item_dots, ore_dots=raw_ore_dots,
+                                companion_dot=_dbg_companion, nearest_enemy=nearest,
+                                resource_target=prev_rt_active,
+                                walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                                state_label=f"RT_DROP({reason})", hp_percent=hp,
+                                counters_snapshot=counters.snapshot(),
+                            )
+                        elif rt_target is not None and prev_rt_active is None:
+                            debug_recorder.maybe_record(
+                                now=now_loop, event="resource_target_acquired",
+                                frame_bgr=frame, minimap_bgr=minimap, center=center,
+                                enemy_dots=filtered_enemy_dots,
+                                item_dots=raw_item_dots, ore_dots=raw_ore_dots,
+                                companion_dot=_dbg_companion, nearest_enemy=nearest,
+                                resource_target=rt_target,
+                                walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                                state_label=f"RT_PICK({rt_target.kind})", hp_percent=hp,
+                                counters_snapshot=counters.snapshot(),
+                            )
                         if rt_target is not None and \
                                 not resource_targeter.is_close(center, MINIMAP_RESOURCE_PICKUP_DIST_PX):
                             rt_waypoint = _a_star_next_waypoint(cached_mask, center, rt_target.pos)
@@ -994,10 +1073,26 @@ def run(
                     qte = detect_mining_qte_window(frame)
                     if qte.get("active", False):
                         mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
+                        # Telemetry: QTE active but in_window not hit for > 1s = press missed window.
+                        if not qte.get("in_window", False) \
+                                and (now_loop - last_qte_in_window_press_t) > 1.0:
+                            counters.qte_press_missed_window += 1
+                            debug_recorder.maybe_record(
+                                now=now_loop, event="qte_miss",
+                                frame_bgr=frame, minimap_bgr=minimap, center=center,
+                                enemy_dots=[], item_dots=[], ore_dots=[],
+                                companion_dot=_dbg_companion, nearest_enemy=None,
+                                resource_target=resource_targeter.active,
+                                walkable_mask=cached_mask, enemy_color_mask=_dbg_enemy_mask,
+                                state_label="QTE_MISS", hp_percent=hp,
+                                counters_snapshot=counters.snapshot(),
+                            )
+                            last_qte_in_window_press_t = now_loop
                         if qte.get("in_window", False) and \
                                 (now_loop - last_mining_qte_press_t) >= MINING_QTE_PRESS_COOLDOWN_SECONDS:
                             tap_key('f', hold_time=0.04)
                             last_mining_qte_press_t = now_loop
+                            last_qte_in_window_press_t = now_loop
                         sleep_interruptible(0.03)
                         continue
 
