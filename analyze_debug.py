@@ -225,3 +225,125 @@ def map_snapshots_to_zones(zones: list[dict], snapshots: list[dict]) -> dict:
                 out[i].append(snap)
                 break
     return out
+
+
+def _duration_human(seconds: float) -> str:
+    s = int(seconds)
+    m, s = divmod(s, 60)
+    return f"{m}m {s}s" if m else f"{s}s"
+
+
+def _iso_seconds_between(a: str | None, b: str | None) -> float:
+    if not a or not b:
+        return 0.0
+    import datetime
+    try:
+        da = datetime.datetime.fromisoformat(a)
+        db = datetime.datetime.fromisoformat(b)
+        return (db - da).total_seconds()
+    except ValueError:
+        return 0.0
+
+
+def render_report(events: dict, snapshots: list[dict],
+                  zone_snapshots: dict[int, list[dict]]) -> str:
+    """Return the full Markdown report as a single string."""
+    zones = events.get("zones", [])
+    deaths = events.get("deaths", [])
+    stucks = events.get("stucks", [])
+    vote_resets = events.get("vote_resets", [])
+    vote_reset_failures = events.get("vote_reset_failures", [])
+    start_ts = events.get("session_start_ts")
+    end_ts = events.get("session_end_ts")
+    runtime = _duration_human(_iso_seconds_between(start_ts, end_ts))
+
+    aggs = aggregate_counters(zones)
+    lines: list[str] = []
+    lines.append(f"# SiegeScout Session Report — {start_ts} → {end_ts}\n")
+    lines.append(
+        f"**Runtime:** {runtime}  |  **Zones:** {len(zones)}  |  "
+        f"**Deaths:** {len(deaths)}  |  "
+        f"**Vote-resets:** {len(vote_resets)} ok / {len(vote_reset_failures)} failed\n"
+    )
+
+    # Counter summary table.
+    lines.append("\n## Counter Summary\n")
+    if not aggs:
+        lines.append("(none)\n")
+    else:
+        lines.append("| Counter | Total | Mean/zone | Max | Outlier zones |")
+        lines.append("|---|---|---|---|---|")
+        for name in sorted(aggs.keys()):
+            a = aggs[name]
+            outs = find_outliers(zones, counter=name)
+            out_str = ", ".join(f"{zname}({val})" for _, val, zname in outs[:3]) if outs else "—"
+            lines.append(
+                f"| {name} | {a['total']} | {a['mean']:.1f} | {a['max']} | {out_str} |"
+            )
+
+    # Problem zones (union of statistical outliers and zones with snapshots).
+    # Zones with diagnostic snapshots are surfaced because the snapshot itself
+    # signals something worth reviewing, even when counters are not outliers.
+    lines.append("\n## Problem Zones\n")
+    problem_indices = set()
+    for name in aggs.keys():
+        for idx, _val, _zname in find_outliers(zones, counter=name):
+            problem_indices.add(idx)
+    for idx, snaps in zone_snapshots.items():
+        if snaps and 0 <= idx < len(zones):
+            problem_indices.add(idx)
+    if not problem_indices:
+        lines.append("(none)\n")
+    else:
+        for idx in sorted(problem_indices):
+            z = zones[idx]
+            lines.append(
+                f"### Zone {idx + 1} — {z.get('name', '?')} "
+                f"({_duration_human(z.get('duration_seconds', 0))})"
+            )
+            counter_dump = " ".join(
+                f"{k}={v}" for k, v in sorted(z.get("counters", {}).items())
+            )
+            lines.append(f"- Counters: {counter_dump}")
+            snaps = zone_snapshots.get(idx, [])
+            if snaps:
+                lines.append("- Snapshots:")
+                for s in snaps[:3]:
+                    lines.append(f"  - {s['path']}")
+            else:
+                lines.append("- Snapshots: (none)")
+            lines.append("")
+
+    # Stuck patterns.
+    lines.append("\n## Stuck Patterns\n")
+    if not stucks:
+        lines.append("(none)\n")
+    else:
+        by_angle: dict[int, int] = {}
+        for s in stucks:
+            by_angle[s["octant_degrees"]] = by_angle.get(s["octant_degrees"], 0) + 1
+        ordered = sorted(by_angle.items(), key=lambda t: -t[1])
+        lines.append("- Octant-escape angles: " +
+                     ", ".join(f"{a}° ({c}×)" for a, c in ordered))
+
+    # Death events.
+    lines.append("\n## Death Events\n")
+    if not deaths:
+        lines.append("(none)\n")
+    else:
+        for i, d in enumerate(deaths, 1):
+            lines.append(f"{i}. {d['timestamp']} — {d['line']}")
+
+    # Vote-reset reliability.
+    lines.append("\n## Vote-Reset Reliability\n")
+    total = len(vote_resets) + len(vote_reset_failures)
+    if total == 0:
+        lines.append("(none)\n")
+    else:
+        ok = len(vote_resets)
+        pct = (ok * 100) // total
+        lines.append(f"- {total} attempted, {ok} succeeded ({pct}% success).")
+        if vote_reset_failures:
+            lines.append(f"- Failures: {len(vote_reset_failures)} (see log timestamps)")
+
+    return "\n".join(lines) + "\n"

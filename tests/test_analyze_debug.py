@@ -161,3 +161,51 @@ def test_map_snapshots_to_zones_assigns_each_snapshot_to_zone_by_timespan():
     mapping = map_snapshots_to_zones(zones, snaps)
     assert len(mapping[0]) == 1 and mapping[0][0]["path"] == "a.png"
     assert len(mapping[1]) == 1 and mapping[1][0]["path"] == "b.png"
+
+
+from analyze_debug import render_report
+
+
+def test_render_report_minimal_no_data():
+    sections = render_report({
+        "session_start_ts": "2026-05-24T10:00:00.000",
+        "session_end_ts":   "2026-05-24T10:00:10.000",
+        "zones": [],
+        "deaths": [],
+        "stucks": [],
+        "vote_resets": [],
+        "vote_reset_failures": [],
+        "hp_events": [],
+    }, snapshots=[], zone_snapshots={})
+    assert "# SiegeScout Session Report" in sections
+    assert "**Zones:** 0" in sections
+    assert "**Deaths:** 0" in sections
+    assert "(none)" in sections   # at least one empty-section placeholder
+
+
+def test_render_report_with_zones_lists_counter_table_and_problem_zones():
+    zones = [
+        {"name": "z1", "duration_seconds": 30.0,
+         "counters": {"enemy_dot_lost_before_confirm": 5},
+         "start_ms": 1000, "end_ms": 31000},
+        {"name": "z2", "duration_seconds": 25.0,
+         "counters": {"enemy_dot_lost_before_confirm": 50},
+         "start_ms": 31000, "end_ms": 56000},
+        {"name": "z3", "duration_seconds": 20.0,
+         "counters": {"enemy_dot_lost_before_confirm": 0},
+         "start_ms": 56000, "end_ms": 76000},
+    ]
+    sections = render_report({
+        "session_start_ts": "2026-05-24T10:00:00.000",
+        "session_end_ts":   "2026-05-24T10:01:16.000",
+        "zones": zones,
+        "deaths": [],
+        "stucks": [],
+        "vote_resets": [{"timestamp": "2026-05-24T10:00:30.000"}],
+        "vote_reset_failures": [],
+        "hp_events": [],
+    }, snapshots=[], zone_snapshots={1: [{"event": "periodic", "path": "debug/p_1.png"}]})
+    assert "enemy_dot_lost_before_confirm" in sections
+    assert "z2" in sections
+    assert "## Problem Zones" in sections
+    assert "debug/p_1.png" in sections
