@@ -342,3 +342,59 @@ def render_report(events: dict, snapshots: list[dict],
             lines.append(f"- Failures: {len(vote_reset_failures)} (see log timestamps)")
 
     return "\n".join(lines) + "\n"
+
+
+def _iso_to_unix_ms(ts: str | None) -> int | None:
+    if not ts:
+        return None
+    import datetime
+    try:
+        return int(datetime.datetime.fromisoformat(ts).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Analyze a SiegeScout debug session.")
+    ap.add_argument("--log", default="debug/bot.log",
+                    help="Path to bot.log (default: debug/bot.log)")
+    ap.add_argument("--debug-dir", default="debug",
+                    help="Directory with *.png snapshots (default: debug)")
+    ap.add_argument("--out", default="debug/SESSION_REPORT.md",
+                    help="Output path (default: debug/SESSION_REPORT.md)")
+    args = ap.parse_args(argv)
+
+    if not os.path.isfile(args.log):
+        print(f"[ERROR] {args.log} not found. Run the bot first — gui.py "
+              f"writes bot.log on every session (since commit r<sha>).")
+        return 1
+
+    with open(args.log, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+
+    session_lines = split_sessions(lines)
+    events = parse_log_lines(session_lines)
+
+    # Convert each zone's ISO start_ts/end_ts to unix_ms so snapshots can be
+    # mapped purely on the integer timeline.
+    for z in events["zones"]:
+        z["start_ms"] = _iso_to_unix_ms(z.get("start_ts"))
+        z["end_ms"] = _iso_to_unix_ms(z.get("end_ts"))
+
+    snapshots = list_snapshots(args.debug_dir)
+    zone_snapshots = map_snapshots_to_zones(events["zones"], snapshots)
+
+    report = render_report(events, snapshots, zone_snapshots)
+
+    out_dir = os.path.dirname(args.out) or "."
+    os.makedirs(out_dir, exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        f.write(report)
+    print(f"[OK] Wrote {args.out} ({len(report)} bytes, {len(events['zones'])} zones, "
+          f"{len(snapshots)} snapshots)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
