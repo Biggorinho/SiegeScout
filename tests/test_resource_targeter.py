@@ -130,14 +130,29 @@ def test_reset_clears_everything_including_visited():
 
 
 def test_releases_target_when_dot_disappears_from_minimap():
-    rt = ResourceTargeter(spot_match_radius_px=8)
+    rt = ResourceTargeter(spot_match_radius_px=8, miss_grace_frames=3)
     rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
     assert rt.active is not None
-    # Next tick: no dots at all — target must drop, no visited entry.
-    result = rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    # Three consecutive miss frames — target must drop, no visited entry.
+    rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    rt.tick(now=2.1, center=(50, 50), item_dots=[], ore_dots=[])
+    result = rt.tick(now=2.2, center=(50, 50), item_dots=[], ore_dots=[])
     assert result is None
     assert rt.active is None
     assert rt._visited == []
+
+
+def test_keeps_target_through_single_miss_frame():
+    # Game-icon animation can hide a dot for one frame — tolerate it.
+    rt = ResourceTargeter(spot_match_radius_px=8, miss_grace_frames=3)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert rt.active is not None
+    # One miss frame, then the dot is back. Target must survive.
+    rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    result = rt.tick(now=2.1, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    assert result is not None
+    assert result.pos == (60, 50)
+    assert result.consecutive_misses == 0  # counter reset on re-acquire
 
 
 def test_keeps_target_through_minor_minimap_jitter():
@@ -226,9 +241,12 @@ def test_release_reason_set_on_release():
 
 
 def test_release_reason_disappeared_when_dot_gone():
-    rt = ResourceTargeter()
+    rt = ResourceTargeter(miss_grace_frames=3)
     rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
+    # Three consecutive miss frames are required before "disappeared" fires.
     rt.tick(now=2.0, center=(50, 50), item_dots=[], ore_dots=[])
+    rt.tick(now=2.1, center=(50, 50), item_dots=[], ore_dots=[])
+    rt.tick(now=2.2, center=(50, 50), item_dots=[], ore_dots=[])
     assert rt.last_release_reason == "disappeared"
 
 

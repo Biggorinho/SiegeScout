@@ -17,6 +17,7 @@ class ResourceTarget:
     kind: str                   # "item" | "ore"
     acquired_at: float          # time.time() when selected
     close_since: float | None   # first time within pickup distance, else None
+    consecutive_misses: int = 0 # frames the dot was absent since last seen
 
 
 class ResourceTargeter:
@@ -26,11 +27,13 @@ class ResourceTargeter:
         max_travel_seconds: float = 8.0,
         spot_match_radius_px: int = 8,
         close_attempt_seconds: float = 4.0,
+        miss_grace_frames: int = 3,
     ) -> None:
         self._memory_seconds = float(memory_seconds)
         self._max_travel_seconds = float(max_travel_seconds)
         self._spot_match_radius_px = int(spot_match_radius_px)
         self._close_attempt_seconds = float(close_attempt_seconds)
+        self._miss_grace_frames = int(miss_grace_frames)
         self._active: ResourceTarget | None = None
         self._visited: list[tuple[tuple[int, int], float]] = []
         self.last_release_reason: str | None = None
@@ -128,10 +131,17 @@ class ResourceTargeter:
             return None
 
         # Still on the minimap (within match radius)?
+        # Allow a few miss-frames before declaring "disappeared" — game icons
+        # animate (pulse/blink) so the HSV+shape filter can lose them for a
+        # frame or two even though they're visually still there.
         dots = item_dots if target.kind == "item" else ore_dots
         if not self._dot_present(dots, target.pos):
-            self.last_release_reason = "disappeared"
-            return None  # disappeared — release without visited entry
+            target.consecutive_misses += 1
+            if target.consecutive_misses >= self._miss_grace_frames:
+                self.last_release_reason = "disappeared"
+                return None
+            return target  # tolerate this frame, keep waiting
+        target.consecutive_misses = 0
 
         return target
 
