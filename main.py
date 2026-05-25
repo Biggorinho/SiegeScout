@@ -635,7 +635,11 @@ def run(
             # Only fires when no vote-reset is in progress (vote-reset legitimately
             # opens the pause menu). Press ESC to exit Options menu first; on the
             # next iteration the loop will see the pause menu and ESC again.
-            if not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until:
+            # Also skip when HP is critical — death-screen shows red elements
+            # that the pause-menu detector false-positives on, and ESC during
+            # the death sequence wastes the respawn click.
+            if not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until \
+                    and not _hp_critical:
                 if is_options_menu_visible(frame):
                     print("[MENU] options menu detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
