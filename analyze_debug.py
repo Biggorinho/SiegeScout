@@ -113,11 +113,18 @@ def parse_log_lines(lines: list[str]) -> dict:
             deaths.append({"timestamp": ts, "line": rest})
             continue
 
-        if "Vote reset triggered" in rest:
+        # Vote-reset success: every successful reset ends with the bot
+        # clicking a node on the world map, which prints exactly once per
+        # successful attempt. The older "Vote reset triggered" form is kept
+        # for backward-compat with logs from earlier bot versions.
+        if "[RST] satanic node picked at" in rest or "Vote reset triggered" in rest:
             vote_resets.append({"timestamp": ts})
             continue
 
-        if "[RST] vote reset failed" in rest:
+        # Each failed retry prints two lines ("...failed after all retries"
+        # and "...vote reset failed xN -> cooldown ..."). Count only the
+        # first to avoid double-counting one event.
+        if "[RST] vote reset failed after all retries" in rest:
             vote_reset_failures.append({"timestamp": ts, "line": rest})
             continue
 

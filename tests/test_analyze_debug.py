@@ -81,7 +81,8 @@ def test_parse_log_lines_extracts_deaths_and_stucks_and_resets():
         "2026-05-24T10:00:00.000  ===== Bot session started =====",
         "2026-05-24T10:00:10.000  [STUCK] octant-escape was=115°",
         "2026-05-24T10:00:20.000  [DEATH] Respawn + Vote Reset",
-        "2026-05-24T10:00:25.000  Vote reset triggered",
+        "2026-05-24T10:00:25.000  [RST] satanic node picked at (557, 846)",
+        "2026-05-24T10:00:30.000  [RST] vote reset failed after all retries",
         "2026-05-24T10:00:30.000  [RST] vote reset failed x1 -> cooldown 8s",
     ]
     events = parse_log_lines(lines)
@@ -89,7 +90,19 @@ def test_parse_log_lines_extracts_deaths_and_stucks_and_resets():
     assert events["stucks"][0]["octant_degrees"] == 115
     assert len(events["deaths"]) == 1
     assert len(events["vote_resets"]) == 1
+    # The second "...failed x1 -> cooldown" line is the same event as the
+    # first "...failed after all retries"; only the latter is counted.
     assert len(events["vote_reset_failures"]) == 1
+
+
+def test_parse_log_lines_recognises_legacy_vote_reset_triggered():
+    # Older bot versions emit "Vote reset triggered" — keep parsing it.
+    lines = [
+        "2026-05-24T10:00:00.000  ===== Bot session started =====",
+        "2026-05-24T10:00:25.000  Vote reset triggered",
+    ]
+    events = parse_log_lines(lines)
+    assert len(events["vote_resets"]) == 1
 
 
 def test_aggregate_counters_empty_zones_returns_zeros():
