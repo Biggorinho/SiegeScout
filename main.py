@@ -232,6 +232,10 @@ def run(
     auto_esc_ignore_until        = 0.0
     vote_reset_in_progress       = False
     menu_escape_cooldown_until   = 0.0
+    pause_menu_frames            = 0
+    options_menu_frames          = 0
+    inventory_panel_frames       = 0
+    MENU_CONFIRM_FRAMES_LOCAL    = 2
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
     last_health_potion_t         = 0.0
@@ -640,23 +644,43 @@ def run(
             # the death sequence wastes the respawn click.
             if not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until \
                     and not _hp_critical:
+                # Require MENU_CONFIRM_FRAMES_LOCAL consecutive detections
+                # before firing ESC — single-frame false positives during
+                # combat (red effects, post-kill loot bursts) otherwise
+                # trigger ESC and break the bot's attack/movement flow.
                 if is_options_menu_visible(frame):
+                    options_menu_frames += 1
+                else:
+                    options_menu_frames = 0
+                if is_pause_menu_visible(frame):
+                    pause_menu_frames += 1
+                else:
+                    pause_menu_frames = 0
+                if is_inventory_panel_visible(frame):
+                    inventory_panel_frames += 1
+                else:
+                    inventory_panel_frames = 0
+
+                if options_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL:
                     print("[MENU] options menu detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
+                    options_menu_frames = 0
                     continue
-                if is_pause_menu_visible(frame):
+                if pause_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL:
                     print("[MENU] pause menu detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
+                    pause_menu_frames = 0
                     continue
-                if is_inventory_panel_visible(frame):
+                if inventory_panel_frames >= MENU_CONFIRM_FRAMES_LOCAL:
                     print("[MENU] inventory/interface panel detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
+                    inventory_panel_frames = 0
                     continue
 
             # ── capture minimap ───────────────────────────────────────────────
