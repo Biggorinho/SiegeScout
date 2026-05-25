@@ -75,14 +75,13 @@ def parse_log_lines(lines: list[str]) -> dict:
     for raw in lines:
         m = _TS_RE.match(raw)
         if not m:
-            # Lines without a timestamp prefix (e.g. the session-marker banner)
-            # are still useful for session boundaries.
-            if _SESSION_MARKER in raw and session_start_ts is None:
-                session_start_ts = ""
+            # Lines without a timestamp prefix (e.g. the un-timestamped
+            # session-marker banner) are skipped — session boundaries are
+            # already handled by split_sessions() before we get here.
             continue
         ts = m.group("ts")
         rest = m.group("rest")
-        if session_start_ts is None:
+        if not session_start_ts:
             session_start_ts = ts
         session_end_ts = ts
 
@@ -367,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not os.path.isfile(args.log):
         print(f"[ERROR] {args.log} not found. Run the bot first — gui.py "
-              f"writes bot.log on every session (since commit r<sha>).")
+              f"writes bot.log on every session.")
         return 1
 
     with open(args.log, "r", encoding="utf-8", errors="replace") as f:
