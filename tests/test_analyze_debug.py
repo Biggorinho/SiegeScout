@@ -184,28 +184,36 @@ def test_render_report_minimal_no_data():
 
 
 def test_render_report_with_zones_lists_counter_table_and_problem_zones():
+    # Counter values across 5 zones: 0, 0, 0, 0, 50 — mean=10, std=20,
+    # threshold = max(mean + 1.5*std, 5) = 40, so 50 > 40 → outlier (index 4).
     zones = [
         {"name": "z1", "duration_seconds": 30.0,
-         "counters": {"enemy_dot_lost_before_confirm": 5},
+         "counters": {"enemy_dot_lost_before_confirm": 0},
          "start_ms": 1000, "end_ms": 31000},
         {"name": "z2", "duration_seconds": 25.0,
-         "counters": {"enemy_dot_lost_before_confirm": 50},
+         "counters": {"enemy_dot_lost_before_confirm": 0},
          "start_ms": 31000, "end_ms": 56000},
         {"name": "z3", "duration_seconds": 20.0,
          "counters": {"enemy_dot_lost_before_confirm": 0},
          "start_ms": 56000, "end_ms": 76000},
+        {"name": "z4", "duration_seconds": 20.0,
+         "counters": {"enemy_dot_lost_before_confirm": 0},
+         "start_ms": 76000, "end_ms": 96000},
+        {"name": "z5", "duration_seconds": 25.0,
+         "counters": {"enemy_dot_lost_before_confirm": 50},
+         "start_ms": 96000, "end_ms": 121000},
     ]
     sections = render_report({
         "session_start_ts": "2026-05-24T10:00:00.000",
-        "session_end_ts":   "2026-05-24T10:01:16.000",
+        "session_end_ts":   "2026-05-24T10:02:01.000",
         "zones": zones,
         "deaths": [],
         "stucks": [],
         "vote_resets": [{"timestamp": "2026-05-24T10:00:30.000"}],
         "vote_reset_failures": [],
         "hp_events": [],
-    }, snapshots=[], zone_snapshots={1: [{"event": "periodic", "path": "debug/p_1.png"}]})
+    }, snapshots=[], zone_snapshots={4: [{"event": "periodic", "path": "debug/p_5.png"}]})
     assert "enemy_dot_lost_before_confirm" in sections
-    assert "z2" in sections
+    assert "z5" in sections
     assert "## Problem Zones" in sections
-    assert "debug/p_1.png" in sections
+    assert "debug/p_5.png" in sections

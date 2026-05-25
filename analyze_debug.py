@@ -281,16 +281,11 @@ def render_report(events: dict, snapshots: list[dict],
                 f"| {name} | {a['total']} | {a['mean']:.1f} | {a['max']} | {out_str} |"
             )
 
-    # Problem zones (union of statistical outliers and zones with snapshots).
-    # Zones with diagnostic snapshots are surfaced because the snapshot itself
-    # signals something worth reviewing, even when counters are not outliers.
+    # Problem zones (statistical outliers only).
     lines.append("\n## Problem Zones\n")
     problem_indices = set()
     for name in aggs.keys():
         for idx, _val, _zname in find_outliers(zones, counter=name):
-            problem_indices.add(idx)
-    for idx, snaps in zone_snapshots.items():
-        if snaps and 0 <= idx < len(zones):
             problem_indices.add(idx)
     if not problem_indices:
         lines.append("(none)\n")
