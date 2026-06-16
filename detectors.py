@@ -1,23 +1,25 @@
 import cv2
 import numpy as np
 import math
-import time
 
 from config import (
     HP_BAR, PLAYER_EXCLUSION_RADIUS, PLAYER_EXCLUSION_RADIUS_FRAC,
     ITEM_MATCH_THRESHOLD, SCREEN_W, SCREEN_H,
     COMPANION_WHITE_SUPPRESS_RADIUS, COMPANION_WHITE_MIN_V, COMPANION_WHITE_MAX_S,
     COMPANION_TRACK_RADIUS,
-    SKULL_DEBUG_SAVE_REJECTED_CANDIDATES, SKULL_DEBUG_REJECTED_COOLDOWN_SECONDS,
+    ITEM_STAR_MIN_SAT, ITEM_STAR_MIN_VAL,
+    ITEM_STAR_MAX_CIRCULARITY, ITEM_STAR_MAX_SOLIDITY, ITEM_STAR_MIN_EXTENT,
+    ITEM_STAR_MIN_ASPECT, ITEM_STAR_MAX_ASPECT, ITEM_STAR_TELEPORT_CYAN_MAX,
+    ROBOFLOW_API_KEY, ROBOFLOW_HEALTHBAR_ENABLED, ROBOFLOW_HEALTHBAR_CLASSES,
+    ROBOFLOW_ENEMY_DUNGEON_ENABLED, ROBOFLOW_ENEMY_DUNGEON_CLASSES,
+    ROBOFLOW_MINIMAP_VISION_ENABLED, ROBOFLOW_MINIMAP_VISION_CLASSES,
 )
-from debug_utils import save_skull_reject_snapshot
 
 
 ENEMY_TIER_SKULL = 4
 ENEMY_TIER_YELLOW = 3
 ENEMY_TIER_PURPLE = 2
 ENEMY_TIER_RED = 1
-_LAST_SKULL_REJECT_SNAPSHOT_T = 0.0
 
 
 def _contour_shape_stats(cnt):
@@ -311,22 +313,6 @@ def classify_enemy_dots(minimap_bgr):
                 for i in range(1, n)]
 
     def _append_from_mask(mask, tier, kind, area_min, circularity_min):
-        def _maybe_save_skull_reject(cnt, reason, stats=None):
-            global _LAST_SKULL_REJECT_SNAPSHOT_T
-            if kind != "skull" or not SKULL_DEBUG_SAVE_REJECTED_CANDIDATES:
-                return
-            now_t = time.time()
-            if (now_t - _LAST_SKULL_REJECT_SNAPSHOT_T) < SKULL_DEBUG_REJECTED_COOLDOWN_SECONDS:
-                return
-            save_skull_reject_snapshot(
-                minimap_bgr,
-                cnt,
-                reason=reason,
-                stats=stats,
-                center=(cx0, cy0),
-            )
-            _LAST_SKULL_REJECT_SNAPSHOT_T = now_t
-
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
             stats = _contour_shape_stats(cnt)
@@ -351,20 +337,15 @@ def classify_enemy_dots(minimap_bgr):
                     # local contrast check below.
                     reject_reason = ["real_gate"]
                     if not _looks_like_real_skull(cnt, stats, cx, cy, reject_reason=reject_reason):
-                        _maybe_save_skull_reject(cnt, reject_reason[0], stats=stats)
                         continue
                     # Town labels / player-adjacent UI often create white skull-like specks near center.
                     if ((cx - cx0) ** 2 + (cy - cy0) ** 2) ** 0.5 <= skull_exclusion_radius:
-                        _maybe_save_skull_reject(cnt, "center_exclusion", stats=stats)
                         continue
                 if _looks_like_white_companion(cnt, True):
-                    _maybe_save_skull_reject(cnt, "white_companion", stats=stats)
                     continue
                 if _looks_like_orange_companion(cnt, True):
-                    _maybe_save_skull_reject(cnt, "orange_companion", stats=stats)
                     continue
                 if not _is_enemy_like(stats, kind):
-                    _maybe_save_skull_reject(cnt, "enemy_shape_gate", stats=stats)
                     continue
                 _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
             else:
@@ -373,7 +354,6 @@ def classify_enemy_dots(minimap_bgr):
                 if kind == "skull":
                     reject_reason = ["large_blob_gate"]
                     if not _looks_like_large_skull_blob(cnt, stats, reject_reason=reject_reason):
-                        _maybe_save_skull_reject(cnt, reject_reason[0], stats=stats)
                         continue
                 for cx, cy in _peaks_in_blob(mask, bx, by, bw, bh):
                     _append_enemy_dot(dots, cx, cy, tier, kind, cx0, cy0, exclusion_radius)
@@ -802,8 +782,41 @@ def find_ore_nodes_on_screen(frame_bgr):
     return dedup
 
 
+def _is_item_star_shape(stats):
+    """Shape gate for a minimap item star.
+
+    Separates the 5-point star from look-alikes by shape: round dots have high
+    circularity/solidity, ore pickaxes high solidity, thin map slivers low
+    extent. Deliberately drops the old hard ``defects >= 4`` requirement, which
+    silently dropped small/anti-aliased real stars (the recall bug)."""
+    if stats is None:
+        return False
+    return (
+        8 <= stats["area"] <= 300
+        and stats["circularity"] <= ITEM_STAR_MAX_CIRCULARITY
+        and stats["solidity"] <= ITEM_STAR_MAX_SOLIDITY
+        and stats["extent"] >= ITEM_STAR_MIN_EXTENT
+        and ITEM_STAR_MIN_ASPECT <= stats["aspect"] <= ITEM_STAR_MAX_ASPECT
+    )
+
+
+def _patch_teleport_cyan_ratio(hsv, cx, cy, r=6):
+    """Fraction of bright-cyan pixels around (cx, cy) — high for teleport crosses."""
+    x0, y0 = max(0, cx - r), max(0, cy - r)
+    x1, y1 = cx + r + 1, cy + r + 1
+    patch = hsv[y0:y1, x0:x1]
+    if patch.size == 0:
+        return 0.0
+    cyan = cv2.inRange(patch, np.array([85, 90, 120]), np.array([103, 255, 255]))
+    return float(np.count_nonzero(cyan)) / float(max(1, cyan.size))
+
+
 def classify_item_dots(minimap_bgr):
-    """Return star-like item markers on the minimap as [x, y, tier, kind]."""
+    """Return star-like item markers on the minimap as [x, y, tier, kind].
+
+    Colour-agnostic: rarity recolours the same star glyph, so any saturated
+    bright hue is a candidate. Look-alikes are rejected by shape and a
+    teleport-cyan colour check (see config ITEM_STAR_* thresholds)."""
     if minimap_bgr is None or minimap_bgr.size == 0:
         return []
 
@@ -812,7 +825,10 @@ def classify_item_dots(minimap_bgr):
     cx0, cy0 = w // 2, h // 2
     exclusion_radius = max(8, int(min(w, h) * 0.06))
 
-    mask = cv2.inRange(hsv, np.array([0, 25, 100]), np.array([180, 255, 255]))
+    # Saturated + bright across all hues catches every rarity colour while
+    # excluding grey/white map linework and structures.
+    mask = cv2.inRange(hsv, np.array([0, ITEM_STAR_MIN_SAT, ITEM_STAR_MIN_VAL]),
+                       np.array([180, 255, 255]))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
 
@@ -820,9 +836,7 @@ def classify_item_dots(minimap_bgr):
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     for cnt in contours:
         stats = _contour_shape_stats(cnt)
-        if stats is None or stats["area"] < 6 or stats["area"] > 280:
-            continue
-        if not _is_star_like(stats):
+        if not _is_item_star_shape(stats):
             continue
         M = cv2.moments(cnt)
         if M["m00"] <= 0:
@@ -830,6 +844,9 @@ def classify_item_dots(minimap_bgr):
         x = int(M["m10"] / M["m00"])
         y = int(M["m01"] / M["m00"])
         if ((x - cx0) ** 2 + (y - cy0) ** 2) ** 0.5 < exclusion_radius:
+            continue
+        # Teleport crosses are bright cyan and otherwise pass the shape gate.
+        if _patch_teleport_cyan_ratio(hsv, x, y) > ITEM_STAR_TELEPORT_CYAN_MAX:
             continue
         dots.append([x, y, 1, "star"])
 
@@ -956,3 +973,279 @@ def find_item_tags_on_screen(frame_bgr):
             dedup.append(node)
     
     return dedup
+
+
+# Roboflow Health Bar Detection
+_healthbar_client = None
+_healthbar_client_init_tried = False
+
+
+def init_healthbar_detector():
+    """Initialize Roboflow health bar detector client."""
+    global _healthbar_client, _healthbar_client_init_tried
+    
+    if _healthbar_client_init_tried:
+        return _healthbar_client
+    
+    _healthbar_client_init_tried = True
+    
+    if not ROBOFLOW_HEALTHBAR_ENABLED or not ROBOFLOW_API_KEY:
+        return None
+    
+    try:
+        from inference_sdk import InferenceHTTPClient
+        _healthbar_client = InferenceHTTPClient(
+            api_url="https://serverless.roboflow.com",
+            api_key=ROBOFLOW_API_KEY
+        )
+        print("[HEALTHBAR] Roboflow client initialized successfully")
+        return _healthbar_client
+    except ImportError:
+        print("[HEALTHBAR] Warning: inference-sdk not installed. Install with: pip install inference-sdk")
+        return None
+    except Exception as e:
+        print(f"[HEALTHBAR] Failed to initialize Roboflow client: {e}")
+        return None
+
+
+def detect_healthbars(frame_bgr):
+    """
+    Detect health bars in current frame using Roboflow model.
+    
+    Returns:
+        List of detections, each with:
+        - 'x', 'y': center coordinates
+        - 'width', 'height': bounding box dimensions
+        - 'confidence': detection confidence (0-1)
+        - 'class': should be 'healthbars'
+    """
+    global _healthbar_client
+    
+    if not ROBOFLOW_HEALTHBAR_ENABLED:
+        return []
+    
+    # Lazy initialization
+    if _healthbar_client is None and not _healthbar_client_init_tried:
+        _healthbar_client = init_healthbar_detector()
+    
+    if _healthbar_client is None:
+        return []
+    
+    if frame_bgr is None or frame_bgr.size == 0:
+        return []
+    
+    try:
+        # Convert BGR to RGB for Roboflow API
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        
+        result = _healthbar_client.run_workflow(
+            workspace_name="discordturtle",
+            workflow_id="hero-siege-healthbars-8gez6",
+            images={"image": frame_rgb},
+            parameters={"classes": "healthbars"},
+            use_cache=True
+        )
+        
+        # Extract predictions from result
+        predictions = result.get("predictions", {})
+        if isinstance(predictions, dict):
+            detections = predictions.get("healthbars", [])
+        else:
+            detections = predictions if isinstance(predictions, list) else []
+        
+        return detections
+    except Exception as e:
+        print(f"[HEALTHBAR] Detection error: {e}")
+        return []
+
+
+# Roboflow Enemy & Dungeon Detection
+_enemy_dungeon_client = None
+_enemy_dungeon_client_init_tried = False
+
+
+def init_enemy_dungeon_detector():
+    """Initialize Roboflow enemy/dungeon detector client."""
+    global _enemy_dungeon_client, _enemy_dungeon_client_init_tried
+    
+    if _enemy_dungeon_client_init_tried:
+        return _enemy_dungeon_client
+    
+    _enemy_dungeon_client_init_tried = True
+    
+    if not ROBOFLOW_ENEMY_DUNGEON_ENABLED or not ROBOFLOW_API_KEY:
+        return None
+    
+    try:
+        from inference_sdk import InferenceHTTPClient
+        _enemy_dungeon_client = InferenceHTTPClient(
+            api_url="https://serverless.roboflow.com",
+            api_key=ROBOFLOW_API_KEY
+        )
+        print("[ENEMY_DUNGEON] Roboflow client initialized successfully")
+        return _enemy_dungeon_client
+    except ImportError:
+        print("[ENEMY_DUNGEON] Warning: inference-sdk not installed. Install with: pip install inference-sdk")
+        return None
+    except Exception as e:
+        print(f"[ENEMY_DUNGEON] Failed to initialize Roboflow client: {e}")
+        return None
+
+
+def detect_enemy_dungeon_features(frame_bgr):
+    """
+    Detect enemy, dungeon, and teleport features using Roboflow model.
+    
+    Returns:
+        Dict with keys for each enabled class:
+        - 'enemy': list of enemy detections
+        - 'teleport': list of teleport detections
+        Each detection includes 'x', 'y', 'width', 'height', 'confidence', 'class'
+    """
+    global _enemy_dungeon_client
+    
+    if not ROBOFLOW_ENEMY_DUNGEON_ENABLED:
+        return {}
+    
+    # Lazy initialization
+    if _enemy_dungeon_client is None and not _enemy_dungeon_client_init_tried:
+        _enemy_dungeon_client = init_enemy_dungeon_detector()
+    
+    if _enemy_dungeon_client is None:
+        return {}
+    
+    if frame_bgr is None or frame_bgr.size == 0:
+        return {}
+    
+    try:
+        # Convert BGR to RGB for Roboflow API
+        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Build parameters string from configured classes
+        classes_param = ", ".join(ROBOFLOW_ENEMY_DUNGEON_CLASSES)
+        
+        result = _enemy_dungeon_client.run_workflow(
+            workspace_name="deniss-workspace-ekltv",
+            workflow_id="my-first-project-3hra4",
+            images={"image": frame_rgb},
+            parameters={"classes": classes_param},
+            use_cache=True
+        )
+        
+        # Extract and organize predictions by class
+        predictions = result.get("predictions", {})
+        detections = {}
+        
+        if isinstance(predictions, dict):
+            for class_name in ROBOFLOW_ENEMY_DUNGEON_CLASSES:
+                detections[class_name] = predictions.get(class_name, [])
+        else:
+            # If predictions is a list, organize by class field
+            detections = {class_name: [] for class_name in ROBOFLOW_ENEMY_DUNGEON_CLASSES}
+            if isinstance(predictions, list):
+                for pred in predictions:
+                    class_name = pred.get("class", "").lower()
+                    if class_name in detections:
+                        detections[class_name].append(pred)
+        
+        return detections
+    except Exception as e:
+        print(f"[ENEMY_DUNGEON] Detection error: {e}")
+        return {}
+
+
+# Roboflow Minimap Vision Detection
+_minimap_vision_client = None
+_minimap_vision_client_init_tried = False
+
+
+def init_minimap_vision_detector():
+    """Initialize Roboflow minimap vision detector client."""
+    global _minimap_vision_client, _minimap_vision_client_init_tried
+    
+    if _minimap_vision_client_init_tried:
+        return _minimap_vision_client
+    
+    _minimap_vision_client_init_tried = True
+    
+    if not ROBOFLOW_MINIMAP_VISION_ENABLED or not ROBOFLOW_API_KEY:
+        return None
+    
+    try:
+        from inference_sdk import InferenceHTTPClient
+        _minimap_vision_client = InferenceHTTPClient(
+            api_url="https://serverless.roboflow.com",
+            api_key=ROBOFLOW_API_KEY
+        )
+        print("[MINIMAP_VISION] Roboflow client initialized successfully")
+        return _minimap_vision_client
+    except ImportError:
+        print("[MINIMAP_VISION] Warning: inference-sdk not installed. Install with: pip install inference-sdk")
+        return None
+    except Exception as e:
+        print(f"[MINIMAP_VISION] Failed to initialize Roboflow client: {e}")
+        return None
+
+
+def detect_minimap_features(minimap_bgr):
+    """
+    Detect features on the minimap using Roboflow minimapVision model.
+    Detects: player, dungeon, items, portals, ores, etc.
+    
+    Returns:
+        Dict with keys for each enabled class:
+        - 'player': list of player detections
+        - 'dungeon': list of dungeon/zone detections
+        - etc. for other enabled classes
+        Each detection includes 'x', 'y', 'width', 'height', 'confidence', 'class'
+    """
+    global _minimap_vision_client
+    
+    if not ROBOFLOW_MINIMAP_VISION_ENABLED:
+        return {}
+    
+    # Lazy initialization
+    if _minimap_vision_client is None and not _minimap_vision_client_init_tried:
+        _minimap_vision_client = init_minimap_vision_detector()
+    
+    if _minimap_vision_client is None:
+        return {}
+    
+    if minimap_bgr is None or minimap_bgr.size == 0:
+        return {}
+    
+    try:
+        # Convert BGR to RGB for Roboflow API
+        minimap_rgb = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2RGB)
+        
+        # Build parameters string from configured classes
+        classes_param = ", ".join(ROBOFLOW_MINIMAP_VISION_CLASSES)
+        
+        result = _minimap_vision_client.run_workflow(
+            workspace_name="test-jmbou",
+            workflow_id="minimapvision",
+            images={"image": minimap_rgb},
+            parameters={"classes": classes_param},
+            use_cache=True
+        )
+        
+        # Extract and organize predictions by class
+        predictions = result.get("predictions", {})
+        detections = {}
+        
+        if isinstance(predictions, dict):
+            for class_name in ROBOFLOW_MINIMAP_VISION_CLASSES:
+                detections[class_name] = predictions.get(class_name, [])
+        else:
+            # If predictions is a list, organize by class field
+            detections = {class_name: [] for class_name in ROBOFLOW_MINIMAP_VISION_CLASSES}
+            if isinstance(predictions, list):
+                for pred in predictions:
+                    class_name = pred.get("class", "").lower()
+                    if class_name in detections:
+                        detections[class_name].append(pred)
+        
+        return detections
+    except Exception as e:
+        print(f"[MINIMAP_VISION] Detection error: {e}")
+        return {}

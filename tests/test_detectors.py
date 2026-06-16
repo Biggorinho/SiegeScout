@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from detectors import classify_enemy_dots
+from detectors import classify_enemy_dots, classify_item_dots
 
 
 def _load_minimap_from_debug(name: str):
@@ -47,3 +47,65 @@ def test_classify_enemy_dots_rejects_duck_like_blob():
     dots = classify_enemy_dots(minimap)
 
     assert not any(kind == "skull" for _, _, _, kind in dots)
+
+
+# ── item-star detection (real captured frame) ──────────────────────────────
+
+_DARK_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "dark_minimap.png"
+
+
+def _load_dark_fixture():
+    if not _DARK_FIXTURE.exists():
+        pytest.skip("dark_minimap fixture not present")
+    img = cv2.imread(str(_DARK_FIXTURE))
+    assert img is not None
+    return img
+
+
+def test_classify_item_dots_catches_real_star():
+    """The red item star (~108,137 in the fixture) must be detected. The old
+    gate's hard `defects >= 4` requirement silently dropped real stars."""
+    dots = classify_item_dots(_load_dark_fixture())
+    assert any((d[0] - 108) ** 2 + (d[1] - 137) ** 2 <= 8 * 8 for d in dots), \
+        f"item star not detected; got {dots}"
+
+
+def test_classify_item_dots_rejects_high_confidence_lookalikes():
+    """The high-confidence non-items must not be reported: teleport crosses
+    (bright cyan) and the round NPC/objective dot. Ore pickaxes are knowingly
+    not asserted here — they're near-identical to stars at icon size and are
+    handled by the separate ore detector/toggle."""
+    dots = classify_item_dots(_load_dark_fixture())
+    lookalikes = [(162, 175), (91, 82), (189, 144)]  # crossA, crossB, round dot
+    for lx, ly in lookalikes:
+        assert not any((d[0] - lx) ** 2 + (d[1] - ly) ** 2 <= 8 * 8 for d in dots), \
+            f"look-alike at {(lx, ly)} wrongly classified as item; got {dots}"
+
+
+def _star_polygon(cx, cy, r_out=7, r_in=3, n=5):
+    import math
+    pts = []
+    for i in range(2 * n):
+        r = r_out if i % 2 == 0 else r_in
+        a = -math.pi / 2 + i * math.pi / n
+        pts.append([int(round(cx + r * math.cos(a))), int(round(cy + r * math.sin(a)))])
+    return np.array(pts, dtype=np.int32)
+
+
+def test_classify_item_dots_is_color_agnostic():
+    """Same star glyph in different rarity colours should all be detected
+    (real minimap stars are ~13px; the gate caps area at 300)."""
+    for color in [(0, 0, 220), (220, 0, 0), (0, 220, 0), (0, 200, 220)]:  # red, blue, green, gold
+        minimap = np.zeros((120, 120, 3), dtype=np.uint8)
+        cv2.fillPoly(minimap, [_star_polygon(40, 40)], color)  # off-centre (center is excluded)
+        dots = classify_item_dots(minimap)
+        assert dots, f"star of colour {color} not detected"
+
+
+def test_classify_item_dots_rejects_cyan_cross():
+    """A bright-cyan plus (teleport) must not be reported as an item."""
+    minimap = np.zeros((120, 120, 3), dtype=np.uint8)
+    cv2.rectangle(minimap, (36, 28), (44, 52), (255, 230, 60), -1)  # off-centre vertical bar
+    cv2.rectangle(minimap, (28, 36), (52, 44), (255, 230, 60), -1)  # horizontal bar
+    dots = classify_item_dots(minimap)
+    assert not dots, f"cyan cross wrongly classified as item; got {dots}"

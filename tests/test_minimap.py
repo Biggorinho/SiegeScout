@@ -202,3 +202,28 @@ def test_buffered_walkable_mask_yields_mask_for_open_minimap():
     # After erosion the walkable area shrinks but shouldn't vanish entirely
     # for a wide-open synthetic frame.
     assert int(np.count_nonzero(mask)) > 0
+
+
+# ── dark-zone walkable regression (real captured frame) ────────────────────
+
+import cv2  # noqa: E402
+
+_DARK_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "dark_minimap.png")
+
+
+def test_dark_minimap_does_not_collapse_walkable():
+    """Regression for the dark-zone collapse: a near-black minimap (Satanic/Hell
+    floor) used to yield only ~720 walkable px, leaving the bot unable to path.
+    The disc model must recover a large connected walkable area."""
+    if not os.path.exists(_DARK_FIXTURE):
+        import pytest
+        pytest.skip("dark_minimap fixture not present")
+    crop = cv2.imread(_DARK_FIXTURE)
+    assert crop is not None
+    h, w = crop.shape[:2]
+    raw = build_raw_walkable_minimap_mask(crop)
+    assert raw is not None
+    conn = connected_walkable_mask(raw, (w // 2, h // 2))
+    # Pre-fix this was ~720 px (~1.3%). Require a substantial connected area.
+    frac = int(np.count_nonzero(conn)) / float(h * w)
+    assert frac > 0.30, f"connected walkable only {frac:.1%} of frame — collapse not fixed"

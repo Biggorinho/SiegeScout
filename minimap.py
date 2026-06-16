@@ -8,6 +8,7 @@ from config import (
     MINIMAP_SMALL_NUDGE, MINIMAP_LARGE_NUDGE,
     SCREEN_W, SCREEN_H,
     PLAYER_EXCLUSION_RADIUS, WALL_BUFFER_ITERATIONS,
+    DARK_MINIMAP_MEDIAN_V, DARK_DISC_RADIUS_FRAC, DARK_WALL_MIN_V,
 )
 
 
@@ -89,11 +90,42 @@ def _build_terrain_wall_mask(minimap_bgr):
     return wall_mask
 
 
+def _dark_zone_walkable_mask(minimap_bgr, hsv):
+    """Walkable mask for dark-floor minimaps (Satanic/Hell zones).
+
+    The bright-floor heuristic fails here because the walkable floor renders
+    near-black. Instead, treat the whole minimap disc (the player is always at
+    its centre) as floor, and carve out only the genuinely bright structures and
+    the cyan boundary ring. Gap-closing keeps thin bright lines from severing the
+    floor into disconnected islands."""
+    h, w = minimap_bgr.shape[:2]
+    cx, cy = w // 2, h // 2
+
+    disc = np.zeros((h, w), dtype=np.uint8)
+    cv2.circle(disc, (cx, cy), int(min(h, w) * 0.5 * DARK_DISC_RADIUS_FRAC), 255, -1)
+
+    bright_wall = cv2.inRange(hsv, np.array([0, 0, DARK_WALL_MIN_V]), np.array([180, 110, 255]))
+    cyan_ring   = cv2.inRange(hsv, np.array([80, 90, 90]), np.array([105, 255, 255]))
+    wall = cv2.bitwise_or(bright_wall, cyan_ring)
+    wall = cv2.dilate(wall, np.ones((2, 2), dtype=np.uint8), iterations=1)
+
+    floor = cv2.bitwise_and(disc, cv2.bitwise_not(wall))
+    floor = cv2.morphologyEx(floor, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
+    floor = cv2.morphologyEx(floor, cv2.MORPH_OPEN,  np.ones((2, 2), dtype=np.uint8), iterations=1)
+    return floor
+
+
 def build_raw_walkable_minimap_mask(minimap_bgr):
     """Estimate walkable minimap area from the current minimap frame only."""
     if minimap_bgr is None or minimap_bgr.size == 0:
         return None
     hsv         = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
+
+    # Dark-floor zones: the bright-floor model below collapses to a few px, so
+    # switch to the disc model when the minimap is overwhelmingly dark.
+    if float(np.median(hsv[:, :, 2])) < DARK_MINIMAP_MEDIAN_V:
+        return _dark_zone_walkable_mask(minimap_bgr, hsv)
+
     unknown_fog = cv2.inRange(hsv, np.array([78,  80, 55]), np.array([110, 255, 255]))
     explored    = cv2.inRange(hsv, np.array([0,    0, 16]), np.array([180, 255, 255]))
     mask        = cv2.bitwise_or(explored, unknown_fog)

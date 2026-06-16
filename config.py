@@ -4,6 +4,8 @@
 # rescale every pixel-valued constant uniformly. Works for any 16:9 display
 # (1024×576, 1280×720, 1920×1080, 2560×1440, 3840×2160). Non-16:9 monitors
 # print a warning — the bot still runs but UI elements may misalign.
+import os
+
 _REF_W, _REF_H = 1920, 1080
 try:
     import mss as _mss  # mss is already a runtime dependency
@@ -27,6 +29,36 @@ def _px(value):
     """Scale a 1920×1080-reference pixel value to the current resolution."""
     return int(value * _SCALE)
 
+
+# Roboflow API Key (shared across all models). Kept out of source control:
+# set the ROBOFLOW_API_KEY environment variable, or drop the key into a
+# git-ignored roboflow_key.txt next to this file.
+def _load_roboflow_key():
+    key = os.environ.get("ROBOFLOW_API_KEY", "").strip()
+    if key:
+        return key
+    try:
+        _here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(_here, "roboflow_key.txt"), "r", encoding="utf-8") as _fh:
+            return _fh.read().strip()
+    except OSError:
+        return ""
+
+
+ROBOFLOW_API_KEY = _load_roboflow_key()
+
+# Roboflow Health Bar Detection (on-screen game UI)
+# DISABLED: inference-sdk requires Python 3.9-3.13, but you're running Python 3.14
+ROBOFLOW_HEALTHBAR_ENABLED = False  # Detects health bars above enemy heads in-game
+ROBOFLOW_HEALTHBAR_CLASSES = ["healthbars"]
+
+# Roboflow Enemy & Dungeon Detection (on-screen game)
+ROBOFLOW_ENEMY_DUNGEON_ENABLED = False  # Detects enemy/teleport on main game screen
+ROBOFLOW_ENEMY_DUNGEON_CLASSES = ["enemy", "teleport"]
+
+# Roboflow Minimap Vision (on minimap specifically)
+ROBOFLOW_MINIMAP_VISION_ENABLED = False  # Detects enemies/items/portals on the minimap
+ROBOFLOW_MINIMAP_VISION_CLASSES = ["player"]  # Can also use: dungeon, enter, exit, portal, ore*
 
 MINIMAP_SMALL = {
     "left":   _px(1673),
@@ -116,6 +148,16 @@ PATH_WAYPOINT_STEPS        = 7   # waypoint count — abstract
 PATH_WAYPOINT_REACH_PX     = _px(8)
 WALL_BUFFER_ITERATIONS     = 2   # erosion iterations — abstract
 
+# Dark-zone walkable model. Some zones (Satanic/Hell dimensions) render the
+# walkable floor as near-black, which collapses the bright-floor walkable
+# heuristic to a few pixels and leaves the bot unable to path. When the minimap
+# median brightness falls below DARK_MINIMAP_MEDIAN_V we switch to a disc model:
+# treat the whole minimap circle as floor, minus genuinely bright structures and
+# the cyan boundary ring.
+DARK_MINIMAP_MEDIAN_V      = 20    # median V below this → dark-zone model
+DARK_DISC_RADIUS_FRAC      = 0.95  # fraction of the half-min-dimension used as the disc
+DARK_WALL_MIN_V            = 140   # V at/above this (low sat) counts as a wall structure
+
 TERRAIN_BLOCKED_PATCH_RADIUS           = _px(14)
 TERRAIN_BLOCKED_MARK_AHEAD_PX          = _px(12)
 TERRAIN_BLOCKED_MARK_STRENGTH          = 90
@@ -132,8 +174,8 @@ EXPLORE_HEATMAP_CELL_SIZE  = _px(8)
 EXPLORE_HEATMAP_PENALTY    = 30.0
 
 # New — escape commitment
-ESCAPE_COMMIT_MIN_SECONDS  = 0.6
-ESCAPE_COMMIT_MAX_SECONDS  = 1.0
+ESCAPE_COMMIT_MIN_SECONDS  = 2.0
+ESCAPE_COMMIT_MAX_SECONDS  = 3.5
 
 # Explore stuck detection — window sized for short ticks (~0.2s each → ~5s before firing)
 EXPLORE_STUCK_WINDOW        = 25
@@ -158,6 +200,26 @@ ATTACK_STUCK_ARM_SECONDS   = 9.0
 
 ITEM_MATCH_THRESHOLD = 0.78
 
+# Minimap item-star detection. Rarity recolours the same star glyph, so the
+# detector is colour-agnostic (any saturated bright hue) and separates the star
+# from look-alikes by shape + a teleport-cyan colour reject:
+#   round NPC/objective dots → high circularity/solidity
+#   ore pickaxes             → high solidity
+#   grey/thin map structures → low saturation / low extent
+#   teleport crosses         → bright cyan
+# Tuned for recall first (missing real stars was the main complaint): catch every
+# rarity colour and thin star renders, reject the high-confidence non-items.
+# Ore pickaxes can still slip through (near-identical at icon size) — ore has its
+# own detector/toggle and the resource targeter's visit-memory absorbs the rest.
+ITEM_STAR_MIN_SAT           = 80    # reject grey/white structure fragments
+ITEM_STAR_MIN_VAL           = 120
+ITEM_STAR_MAX_CIRCULARITY   = 0.45  # reject round NPC/objective dots
+ITEM_STAR_MAX_SOLIDITY      = 0.70  # reject filled circles
+ITEM_STAR_MIN_EXTENT        = 0.26  # reject the thinnest map slivers (keeps thin stars)
+ITEM_STAR_MIN_ASPECT        = 0.5
+ITEM_STAR_MAX_ASPECT        = 2.0
+ITEM_STAR_TELEPORT_CYAN_MAX = 0.25  # patch cyan fraction above this = teleport
+
 ENABLE_MINING                         = False
 ENABLE_LOOT_ITEMS                     = False
 MINING_SCAN_INTERVAL_SECONDS          = 0.10
@@ -181,6 +243,9 @@ MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS   = 12.0      # don't revisit failed spots
 MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS     = 8.0       # give up after Xs on one target
 MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX   = _px(8)    # tolerance for "same spot"
 MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-mark attempted
+# Once standing on/near a minimap-targeted resource, items and ore are both
+# collected by pressing F; ore needs a second F this many seconds later to mine.
+RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS  = 0.5
 
 # ── debug snapshots + detection telemetry ────────────────────────────────
 ENABLE_DEBUG_SNAPSHOTS              = False
@@ -241,9 +306,12 @@ MAP_NODE_CLICK_Y_OFFSET_FRAC = 0.006
 FALLBACK_NODE_X_FRAC = 0.36
 FALLBACK_NODE_Y_FRAC = 0.435
 
-SATANIC_NODE_CLICK_RING_RADIUS_PX = _px(16)
-SATANIC_NODE_CLICK_X_OFFSET       = _px(-2)
-SATANIC_NODE_CLICK_Y_OFFSET       = _px(16)
+SATANIC_NODE_CLICK_RING_RADIUS_PX  = _px(16)
+SATANIC_NODE_CLICK_X_OFFSET        = _px(-2)
+SATANIC_NODE_CLICK_Y_OFFSET        = _px(16)
+# All fixed-node Y coords are calibrated ~27px too low vs actual screen position.
+# Applied only in the CV detection click path (not fixed-zone direct click).
+SATANIC_NODE_CLICK_Y_CORRECTION    = _px(-27)
 SATANIC_NODE_MIN_SCORE            = 16.0  # detection score threshold — abstract
 
 # Fixed world-map node coordinates (screen pixels on 1920x1080 map capture).
@@ -282,8 +350,8 @@ _SATANIC_FIXED_NODES_REF = {
     "The Devil's Breach": (698, 679),
     "The Glacial Trail": (467, 265),
     "The Highland Mines": (440, 765),
-    "The Nightmare": (578, 702),
-    "The Pumpkin Patch": (244, 499),
+    "The Nightmare": (578, 730),
+    "The Pumpkin Patch": (244, 525),
     "Woodhill Plains": (339, 463),
 }
 SATANIC_FIXED_NODES = {
@@ -316,5 +384,12 @@ ENABLE_MOVEMENT_ABILITY            = True
 MOVEMENT_ABILITY_KEY               = 'r'
 MOVEMENT_ABILITY_COOLDOWN_SECONDS  = 3.0
 
-EXPLORE_NAV_STALL_FRAMES    = 6
-EXPLORE_NAV_STALL_MOTION_PX = 0.45
+EXPLORE_NAV_STALL_FRAMES    = 12
+EXPLORE_NAV_STALL_MOTION_PX = 0.30
+
+# ── Combat style toggle ───────────────────────────────────────────────────────
+# MELEE_MODE = True  → bot always advances into enemies, no kiting or backpedal
+# MELEE_MODE = False → ranged behaviour (current default): kite, orbit, flee
+MELEE_MODE                  = False
+MELEE_FLEE_MINIMAP_DIST     = _px(5)    # px — only retreat if literally overlapping
+MELEE_CHASE_MINIMAP_DIST    = _px(20)   # px — A* approach threshold in melee mode

@@ -21,6 +21,7 @@ from config import (
     HP_RECOVERY_POTION_PRESSES, HP_RECOVERY_COOLDOWN_SECONDS,
     ATTACK_LOST_GRACE, ATTACK_TIMEOUT, FLEE_MAX_WAIT,
     ATTACK_MOVE_REPLAN_SECONDS, ATTACK_CHASE_MINIMAP_DIST,
+    MELEE_CHASE_MINIMAP_DIST,
     ATTACK_RIGHTCLICK_INTERVAL_SECONDS, ATTACK_KEY3_INTERVAL_SECONDS,
     ATTACK_SWEEP_INTERVAL_SECONDS, ATTACK_SWEEP_DURATION_SECONDS, ATTACK_SWEEP_RADIUS,
     ATTACK_NO_CONFIRMED_ENEMY_TIMEOUT_SECONDS,
@@ -64,6 +65,7 @@ from config import (
     MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
     MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
+    RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS,
     ENABLE_DEBUG_SNAPSHOTS,
     DEBUG_DIR,
     DEBUG_PERIODIC_INTERVAL_SECONDS,
@@ -85,6 +87,8 @@ from detectors import (
     is_pause_menu_visible, is_options_menu_visible, is_inventory_panel_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
+    init_healthbar_detector, detect_healthbars,
+    init_minimap_vision_detector,
     classify_item_dots, classify_ore_dots,
     build_enemy_color_mask,
 )
@@ -125,10 +129,12 @@ def run(
     enable_rightclick_skill=None, rightclick_cooldown=None,
     enable_key3_skill=None, key3_cooldown=None,
     enable_movement_ability=None, movement_ability_cooldown=None,
+    melee_mode=None,
     enable_debug_snapshots=None,
 ):
     import config as _cfg
     _enable_death_handling   = _cfg.ENABLE_DEATH_HANDLING if enable_death_handling is None else enable_death_handling
+    _melee_mode              = _cfg.MELEE_MODE            if melee_mode is None            else melee_mode
     _enable_mining           = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
     _enable_loot_items       = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
     _enable_debug_snapshots  = _cfg.ENABLE_DEBUG_SNAPSHOTS if enable_debug_snapshots is None else enable_debug_snapshots
@@ -144,6 +150,12 @@ def run(
     print("Bot started | q=Stop | p=Pause | esc=Emergency stop")
     print("Game window must be visible (no background capture with mss)")
     print("Minimap mode: small")
+
+    # Initialize Roboflow detectors if enabled
+    # - Health bar: Detects enemy health bars on-screen (confirms visible enemies)
+    # - Minimap Vision: Detects features directly on the minimap (dungeon, items, portals, etc.)
+    init_healthbar_detector()
+    init_minimap_vision_detector()
 
     ENEMY_SOFT_RESET_GRACE_SECONDS = 3.0
 
@@ -633,6 +645,10 @@ def run(
                 zone_opening_key3_taps_remaining  = 0
                 next_attack_rightclick_t          = time.time() + _buff_shield_cd
                 next_attack_key3_t                = time.time() + _key3_cooldown
+                # Lock in the minimap-computed direction for 2.5s so the bot physically
+                # moves away from the spawn area before the navigator re-evaluates.
+                escape_dx, escape_dy       = explore_dx, explore_dy
+                escape_committed_until     = time.time() + 2.5
                 continue
 
             # ── stuck-in-menu safety net ──────────────────────────────────────
@@ -768,6 +784,11 @@ def run(
             enemy_dots = classify_enemy_dots(minimap)
             dots       = [(x, y) for x, y, _, _ in enemy_dots]
             center = minimap_center_from_image(minimap)
+
+            # Detect enemies via health bars on-screen (confirms enemy visibility)
+            # This is separate from minimap detection - it confirms enemies are visible in-game
+            healthbar_detections = detect_healthbars(frame)
+            on_screen_enemy_count = len(healthbar_detections) if healthbar_detections else 0
 
             terrain_memory.update(minimap)
 
@@ -1056,9 +1077,7 @@ def run(
                     if not qte_active:
                         raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
                         raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
-                        # Strip the companion's symbol before resources see them.
                         raw_item_dots, raw_ore_dots = companion.filter_resources(raw_item_dots, raw_ore_dots)
-                        # Frame-stable confirmation per kind.
                         rt_item_dots = item_confidence.update(raw_item_dots, now_loop)
                         rt_ore_dots  = ore_confidence.update(raw_ore_dots,  now_loop)
                         prev_rt_active = resource_targeter.active
@@ -1069,7 +1088,6 @@ def run(
                             ore_dots=rt_ore_dots,
                             close_threshold_px=MINIMAP_RESOURCE_PICKUP_DIST_PX,
                         )
-                        # Resource target lifecycle telemetry.
                         if prev_rt_active is not None and rt_target is None:
                             reason = resource_targeter.last_release_reason
                             if reason == "disappeared" and (now_loop - prev_rt_active.acquired_at) < 1.0:
@@ -1107,14 +1125,26 @@ def run(
                                 wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
                                 sleep_interruptible(0.03)
                                 continue
-                        # If target is None or already close, fall through to
-                        # the existing on-screen handlers below.
+                        elif rt_target is not None:
+                            # Standing on/near the resource. Both items and ore are
+                            # collected by pressing F right here; ore needs a second
+                            # F ~0.5s later to mine (harmless extra tap for items).
+                            # QTE-based ore (mining enabled) is left to the QTE-aware
+                            # mining handler below instead.
+                            if not (rt_target.kind == "ore" and _enable_mining):
+                                tap_key('f', hold_time=0.04)
+                                sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
+                                tap_key('f', hold_time=0.04)
+                                resource_targeter.mark_attempted(now_loop)
+                                sleep_interruptible(0.03)
+                                continue
+                        # Target None, or QTE-ore handled by the mining handler
+                        # below — fall through to the existing on-screen handlers.
 
                 if _enable_mining and resource_collect_allowed and not confirmed_enemy_now:
                     qte = detect_mining_qte_window(frame)
                     if qte.get("active", False):
                         mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
-                        # Telemetry: QTE active but in_window not hit for > 1s = press missed window.
                         if not qte.get("in_window", False) \
                                 and (now_loop - last_qte_in_window_press_t) > 1.0:
                             counters.qte_press_missed_window += 1
@@ -1438,6 +1468,16 @@ def run(
                     explore_pause_until = time.time() + random.uniform(
                         POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS)
                     state_start = time.time()
+                    explore_navigator.reset()
+                    # Continue exploring in the direction enemies came from —
+                    # more enemies are likely deeper in that direction.
+                    if last_seen_enemy_vec is not None:
+                        _vx, _vy = last_seen_enemy_vec
+                        _vlen = math.hypot(_vx, _vy)
+                        if _vlen > 1e-6:
+                            escape_dx = int((_vx / _vlen) * 200)
+                            escape_dy = int((_vy / _vlen) * 200)
+                            escape_committed_until = time.time() + 2.5
                     continue
 
                 if timed_out and confirmed_enemy_now:
@@ -1449,6 +1489,14 @@ def run(
                     print("ATTACK timeout without contact -> EXPLORE")
                     state       = State.EXPLORE
                     state_start = time.time()
+                    explore_navigator.reset()
+                    if last_seen_enemy_vec is not None:
+                        _vx, _vy = last_seen_enemy_vec
+                        _vlen = math.hypot(_vx, _vy)
+                        if _vlen > 1e-6:
+                            escape_dx = int((_vx / _vlen) * 200)
+                            escape_dy = int((_vy / _vlen) * 200)
+                            escape_committed_until = time.time() + 2.5
                     continue
 
                 if not confirmed_enemy_now and \
@@ -1459,6 +1507,14 @@ def run(
                     print("ATTACK without confirmed enemy -> EXPLORE")
                     state       = State.EXPLORE
                     state_start = time.time()
+                    explore_navigator.reset()
+                    if last_seen_enemy_vec is not None:
+                        _vx, _vy = last_seen_enemy_vec
+                        _vlen = math.hypot(_vx, _vy)
+                        if _vlen > 1e-6:
+                            escape_dx = int((_vx / _vlen) * 200)
+                            escape_dy = int((_vy / _vlen) * 200)
+                            escape_committed_until = time.time() + 2.5
                     continue
 
                 if (time.time() - last_attack_move_plan_t) > ATTACK_MOVE_REPLAN_SECONDS:
@@ -1469,9 +1525,11 @@ def run(
                         kite_committed_until=kite_committed_until,
                         kite_cached_move=kite_cached_move,
                         terrain_memory=terrain_memory,
+                        melee_mode=_melee_mode,
                     )
                     # Override linear approach with A* when enemy is far — navigates around walls
-                    if confirmed_enemy_now and nearest and enemy_dist > ATTACK_CHASE_MINIMAP_DIST:
+                    _chase_thresh = MELEE_CHASE_MINIMAP_DIST if _melee_mode else ATTACK_CHASE_MINIMAP_DIST
+                    if confirmed_enemy_now and nearest and enemy_dist > _chase_thresh:
                         chase_dx, chase_dy = enemy_chaser.get_chase_delta(
                             minimap, center, nearest, cached_mask)
                         attack_move_dx, attack_move_dy = chase_dx, chase_dy
