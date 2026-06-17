@@ -66,6 +66,7 @@ from config import (
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
     MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS,
     RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS,
+    LOOT_SWEEP_MAX_SECONDS,
     ENABLE_DEBUG_SNAPSHOTS,
     DEBUG_DIR,
     DEBUG_PERIODIC_INTERVAL_SECONDS,
@@ -150,6 +151,17 @@ def run(
     print("Bot started | q=Stop | p=Pause | esc=Emergency stop")
     print("Game window must be visible (no background capture with mss)")
     print("Minimap mode: small")
+    print("── Settings ──────────────────────────────────")
+    print(f"  loot_items     = {_enable_loot_items}")
+    print(f"  mining         = {_enable_mining}")
+    print(f"  death_handling = {_enable_death_handling}")
+    print(f"  melee_mode     = {_melee_mode}")
+    print(f"  target_zone    = {target_zone}")
+    print(f"  buff_shield    = {_enable_buff_shield} (key={_buff_shield_key}, cd={_buff_shield_cd}s)")
+    print(f"  key3_skill     = {_enable_key3_skill} (cd={_key3_cooldown}s)")
+    print(f"  move_ability   = {_enable_movement_ability} (key={_movement_ability_key}, cd={_movement_ability_cd}s)")
+    print(f"  debug_snapshots= {_enable_debug_snapshots}")
+    print("──────────────────────────────────────────────")
 
     # Initialize Roboflow detectors if enabled
     # - Health bar: Detects enemy health bars on-screen (confirms visible enemies)
@@ -247,7 +259,11 @@ def run(
     pause_menu_frames            = 0
     options_menu_frames          = 0
     inventory_panel_frames       = 0
+    world_map_frames             = 0
+    last_safe_zone_probe_t       = 0.0
     MENU_CONFIRM_FRAMES_LOCAL    = 2
+    SAFE_ZONE_PROBE_DELAY_SECONDS    = 8.0   # no combat this long after zone start -> likely safe zone
+    SAFE_ZONE_PROBE_INTERVAL_SECONDS = 4.0   # tap F (waystone) at most this often
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
     last_health_potion_t         = 0.0
@@ -288,6 +304,8 @@ def run(
     mining_target_screen         = None
     last_loot_items_scan_t       = 0.0
     last_loot_items_click_t      = 0.0
+    last_resource_log_t          = 0.0   # rate-limit for [LOOT] minimap-dot logging
+    loot_sweep_until             = 0.0   # defer vote-reset until this time while looting
     last_terrain_block_mark_t    = 0.0
     _zone_logged_reset_t         = 0.0   # last_vote_reset_t for which zone confirm was printed
     # ── shared reset helper ────────────────────────────────────────────────────
@@ -699,6 +717,21 @@ def run(
                     inventory_panel_frames = 0
                     continue
 
+                # Map selection (world map) open outside the vote-reset routine:
+                # pick a zone instead of idling/exploring. is_world_map_visible is
+                # reliable, so this is the bot's explicit "I'm at map selection" state.
+                if is_world_map_visible(frame):
+                    world_map_frames += 1
+                else:
+                    world_map_frames = 0
+                if world_map_frames >= MENU_CONFIRM_FRAMES_LOCAL:
+                    print("[MAP] map selection detected -> picking zone")
+                    world_map_frames = 0
+                    if pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone):
+                        _do_zone_reset()
+                    menu_escape_cooldown_until = now_loop + 0.8
+                    continue
+
             # ── capture minimap ───────────────────────────────────────────────
             minimap_region = get_minimap_region(minimap_mode)
             minimap        = cv2.cvtColor(np.array(sct.grab(minimap_region)), cv2.COLOR_BGRA2BGR)
@@ -921,7 +954,24 @@ def run(
                 _attempt_vote_reset(with_spin=True)
                 continue
 
-            if zone_had_attack and reset_safe_window and cooldown_ok and \
+            # Loot sweep: when combat has stopped, defer the routine vote-reset
+            # triggers (idle + zone-timeout) while the resource targeter is still
+            # actively collecting items/ore, bounded by LOOT_SWEEP_MAX_SECONDS. The
+            # stuck/death/HP triggers below are NOT deferred — those need a prompt reset.
+            loot_in_progress = (
+                (_enable_loot_items or _enable_mining)
+                and (hp or 0.0) >= VOTE_RESET_MIN_HP
+                and resource_targeter.active is not None
+            )
+            if loot_in_progress and loot_sweep_until == 0.0:
+                loot_sweep_until = now_loop + LOOT_SWEEP_MAX_SECONDS
+                print("[LOOT] resources present -> sweeping before reset")
+            defer_for_loot = loot_in_progress and now_loop < loot_sweep_until
+            if loot_sweep_until != 0.0 and not defer_for_loot:
+                print("[LOOT] sweep done")
+                loot_sweep_until = 0.0
+
+            if zone_had_attack and reset_safe_window and cooldown_ok and not defer_for_loot and \
                     (now_loop - last_attack_activity_t) >= ATTACK_IDLE_VOTE_RESET_SECONDS:
                 if attack_held:
                     attack_key_up()
@@ -930,7 +980,7 @@ def run(
                 _attempt_vote_reset(with_spin=True)
                 continue
 
-            if reset_safe_window and cooldown_ok and \
+            if reset_safe_window and cooldown_ok and not defer_for_loot and \
                     (now_loop - zone_started_t) >= ZONE_MAX_SECONDS_BEFORE_RESET:
                 if attack_held:
                     attack_key_up()
@@ -998,7 +1048,10 @@ def run(
                 continue
 
             # ── right-click shield refresh ────────────────────────────────────
-            if _enable_buff_shield and now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
+            # Only refresh the buff in a confirmed combat zone (combat has happened,
+            # or an enemy is up) — never in the safe zone, where it wastes the cast.
+            if _enable_buff_shield and (zone_had_attack or confirmed_enemy_now) \
+                    and now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
                 attack_held              = cast_key_skill_safe(_buff_shield_key, attack_held, resume_left=True)
                 rightclick_busy_until    = time.time() + 0.35
                 next_attack_rightclick_t = now_loop + _buff_shield_cd
@@ -1025,6 +1078,7 @@ def run(
                 last_enemy_seen_t = time.time()
                 if state != State.ATTACK:
                     resource_targeter.release()
+                    loot_sweep_until = 0.0  # restart loot budget after this fight
                     debug_recorder.maybe_record(
                         now=now_loop, event="enter_attack",
                         frame_bgr=frame, minimap_bgr=minimap, center=center,
@@ -1061,6 +1115,20 @@ def run(
                     sleep_interruptible(0.05)
                     continue
 
+                # Safe-zone recovery: after a reset the bot can land on the safe-zone
+                # waystone. If no enemy has EVER appeared in this zone (combat zones
+                # engage within a few seconds) and the map isn't open, tap F to use
+                # the waystone — the map-selection handler above then picks a zone.
+                if not vote_reset_in_progress and not zone_had_attack \
+                        and not confirmed_enemy_now \
+                        and (now_loop - zone_started_t) >= SAFE_ZONE_PROBE_DELAY_SECONDS \
+                        and (now_loop - last_safe_zone_probe_t) >= SAFE_ZONE_PROBE_INTERVAL_SECONDS:
+                    print("[SAFE?] no combat in zone -> tapping F (waystone) to open map")
+                    last_safe_zone_probe_t = now_loop
+                    tap_key('f', hold_time=0.06)
+                    sleep_interruptible(0.05)
+                    continue
+
                 # Prioritize exploration/combat acquisition right after zone start.
                 resource_collect_allowed = (
                     zone_had_attack
@@ -1077,6 +1145,9 @@ def run(
                     if not qte_active:
                         raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
                         raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        if (raw_item_dots or raw_ore_dots) and (now_loop - last_resource_log_t) >= 1.0:
+                            print(f"[LOOT] minimap: {len(raw_item_dots)} item(s) {len(raw_ore_dots)} ore on map")
+                            last_resource_log_t = now_loop
                         raw_item_dots, raw_ore_dots = companion.filter_resources(raw_item_dots, raw_ore_dots)
                         rt_item_dots = item_confidence.update(raw_item_dots, now_loop)
                         rt_ore_dots  = ore_confidence.update(raw_ore_dots,  now_loop)
@@ -1126,20 +1197,25 @@ def run(
                                 sleep_interruptible(0.03)
                                 continue
                         elif rt_target is not None:
-                            # Standing on/near the resource. Both items and ore are
-                            # collected by pressing F right here; ore needs a second
-                            # F ~0.5s later to mine (harmless extra tap for items).
-                            # QTE-based ore (mining enabled) is left to the QTE-aware
-                            # mining handler below instead.
-                            if not (rt_target.kind == "ore" and _enable_mining):
+                            # Items drive LOOTING, ore drives MINING — different in-game
+                            # mechanics, so handle each kind separately. No mark_attempted:
+                            # keep working the resource until it's gone (marker vanishes →
+                            # target released) or the targeter's close-attempt times out.
+                            if rt_target.kind == "ore":
+                                # Mining: stand next to the ore, press F, wait ~0.5s,
+                                # then press F again.
                                 tap_key('f', hold_time=0.04)
                                 sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
                                 tap_key('f', hold_time=0.04)
-                                resource_targeter.mark_attempted(now_loop)
-                                sleep_interruptible(0.03)
-                                continue
-                        # Target None, or QTE-ore handled by the mining handler
-                        # below — fall through to the existing on-screen handlers.
+                            else:
+                                # Looting: nudge onto the star and spam F until grabbed.
+                                idx, idy = dot_to_screen_delta(rt_target.pos, center)
+                                if abs(idx) + abs(idy) > 6:
+                                    wasd_move(idx, idy, 0.08)
+                                tap_key('f', hold_time=0.04)
+                            sleep_interruptible(0.05)
+                            continue
+                        # Target None — fall through to the on-screen handlers below.
 
                 if _enable_mining and resource_collect_allowed and not confirmed_enemy_now:
                     qte = detect_mining_qte_window(frame)

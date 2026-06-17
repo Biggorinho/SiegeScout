@@ -7,7 +7,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from detectors import classify_enemy_dots, classify_item_dots
+from detectors import (
+    classify_enemy_dots,
+    classify_item_dots,
+    classify_ore_dots,
+    is_world_map_visible,
+)
 
 
 def _load_minimap_from_debug(name: str):
@@ -100,6 +105,40 @@ def test_classify_item_dots_is_color_agnostic():
         cv2.fillPoly(minimap, [_star_polygon(40, 40)], color)  # off-centre (center is excluded)
         dots = classify_item_dots(minimap)
         assert dots, f"star of colour {color} not detected"
+
+
+def _fixture(name):
+    p = Path(__file__).resolve().parent / "fixtures" / name
+    if not p.exists():
+        pytest.skip(f"missing fixture: {name}")
+    img = cv2.imread(str(p))
+    assert img is not None
+    return img
+
+
+def test_is_world_map_visible_detects_map_selection():
+    """The map-selection (world map) screen must be detected as the map state."""
+    assert is_world_map_visible(_fixture("map_selection.png")) is True
+
+
+def test_is_world_map_visible_false_in_safe_zone():
+    """The safe zone is NOT the world map — must not be mistaken for map selection."""
+    assert is_world_map_visible(_fixture("safe_zone.png")) is False
+
+
+def test_classify_ore_dots_finds_real_ore():
+    """Real orange ore icons (~64,131 and ~67,111 in the fixture) are detected."""
+    ore = classify_ore_dots(_load_dark_fixture())
+    assert any((o[0] - 65) ** 2 + (o[1] - 120) ** 2 <= 20 * 20 for o in ore), \
+        f"real ore not detected; got {ore}"
+
+
+def test_classify_ore_dots_rejects_item_star():
+    """The red item star (~107,136) must NOT be tagged as ore — the old 'any
+    saturated colour' mask wrongly claimed it (and red enemy dots) as ore."""
+    ore = classify_ore_dots(_load_dark_fixture())
+    assert not any((o[0] - 107) ** 2 + (o[1] - 136) ** 2 <= 8 * 8 for o in ore), \
+        f"item star wrongly tagged as ore; got {ore}"
 
 
 def test_classify_item_dots_rejects_cyan_cross():

@@ -11,13 +11,13 @@ from config import (
     FALLBACK_NODE_X_FRAC, FALLBACK_NODE_Y_FRAC,
     SATANIC_NODE_CLICK_RING_RADIUS_PX,
     SATANIC_NODE_CLICK_X_OFFSET, SATANIC_NODE_CLICK_Y_OFFSET,
-    SATANIC_NODE_MIN_SCORE, SATANIC_FIXED_NODES,
+    SATANIC_NODE_MIN_SCORE, SATANIC_FIXED_NODES, SATANIC_NODE_CLICK_Y_CORRECTION,
     VOTE_RESET_INTERACT_KEY,
     VOTE_RESET_MENU_SETTLE_SECONDS, VOTE_RESET_CLICK_RETRY_DELAY,
     VOTE_RESET_CLICK_Y_SWEEP_FRAC,
     VOTE_RESET_FIXED_CLICK_X_PX, VOTE_RESET_FIXED_CLICK_Y_PX,
     VOTE_RESET_CLICK_ATTEMPTS,
-    VOTE_RESET_SHORTCUT_KEY, VOTE_RESET_SHORTCUT_WAIT_SECONDS,
+    VOTE_RESET_SEQUENCE_ATTEMPTS, VOTE_RESET_RETRY_DELAY_SECONDS,
     SATANIC_NODE_SCAN_ATTEMPTS, SATANIC_NODE_SCAN_RETRY_SECONDS,
     DEATH_RESPAWN_X_FRAC, DEATH_RESPAWN_Y_FRAC,
     DEATH_RESPAWN_CLICK_ATTEMPTS, DEATH_RESPAWN_RING_RADIUS_PX,
@@ -31,7 +31,7 @@ from detectors import (
 from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
-    tap_key, tap_key_shifted, sleep_interruptible, left_click_at,
+    tap_key, sleep_interruptible, left_click_at,
     release_all_inputs, wasd_move,
 )
 
@@ -295,6 +295,27 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
     if frame_bgr is None or frame_bgr.size == 0:
         return None
 
+    # Estimate how much the world map has been scrolled/dragged from the calibrated
+    # positions by voting across all (detected_blue_node, fixed_node) offset pairs.
+    # The offset with the most agreeing pairs is the map scroll correction.
+    offset_x, offset_y = 0, 0
+    detected_blue = _detect_blue_node_centers(frame_bgr)
+    if len(detected_blue) >= 3:
+        fixed_list = list(SATANIC_FIXED_NODES.values())
+        _BUCKET = 25
+        _votes: dict = {}
+        for sx, sy in detected_blue:
+            for fx, fy in fixed_list:
+                bx = round((sx - fx) / _BUCKET) * _BUCKET
+                by = round((sy - fy) / _BUCKET) * _BUCKET
+                _votes[(bx, by)] = _votes.get((bx, by), 0) + 1
+        if _votes:
+            _best_key, _best_n = max(_votes.items(), key=lambda kv: kv[1])
+            if _best_n >= 3:
+                offset_x, offset_y = int(_best_key[0]), int(_best_key[1])
+                if offset_x != 0 or offset_y != 0:
+                    print(f"[SAT] map scroll offset: dx={offset_x} dy={offset_y} ({_best_n} votes)")
+
     hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
     best = None
     best_score = -1.0
@@ -304,7 +325,7 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
     second_score = -1.0
 
     for name, pos in SATANIC_FIXED_NODES.items():
-        x, y = int(pos[0]), int(pos[1])
+        x, y = int(pos[0]) + offset_x, int(pos[1]) + offset_y
         scored = _score_satanic_fixed_node(hsv, x, y)
         if scored is None:
             continue
@@ -372,7 +393,7 @@ def _find_satanic_node(frame_bgr):
     best, best_score = None, -1.0
 
     roi_h, roi_w = hsv.shape[:2]
-    edge_margin_x = int(roi_w * 0.06)
+    edge_margin_x = int(roi_w * 0.04)
     edge_margin_y = int(roi_h * 0.04)
 
     if len(contours) > 120:
@@ -594,15 +615,26 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     rows   = _find_pause_menu_button_rows(frame)
     vote_x = VOTE_RESET_FIXED_CLICK_X_PX
     vote_y = VOTE_RESET_FIXED_CLICK_Y_PX
-    target_y = vote_y
+
+    # The menu's row count varies (5 vs 7 rows), so the vote-reset button moves.
+    # Click the DETECTED row first (most accurate), then fall back to the fixed y
+    # plus a small downward sweep.
+    candidate_ys = []
     if rows:
-        selected = _select_vote_reset_row(rows, target_y)
-        selected_y = selected[0] if selected is not None else target_y
-        print(f"[RST] vote reset detector row y={selected_y} -> fixed click y={vote_y} (target={target_y}, {len(rows)} rows)")
+        selected = _select_vote_reset_row(rows, vote_y)
+        if selected is not None:
+            candidate_ys.append(int(selected[0]))
+            print(f"[RST] vote reset detector row y={int(selected[0])} (+ fixed y={vote_y}, {len(rows)} rows)")
     else:
         print(f"[RST] vote reset fallback y={vote_y} (no rows detected)")
-    for i in range(attempts):
-        y_i = vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC)
+    for i in range(max(1, attempts)):
+        candidate_ys.append(vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC))
+
+    seen = set()
+    for y_i in candidate_ys:
+        if y_i in seen:
+            continue
+        seen.add(y_i)
         left_click_at(vote_x, y_i, hold_time=0.08)
         if not sleep_interruptible(0.12):
             return False
@@ -747,87 +779,112 @@ def _reopen_world_map_for_recenter(sct, full_mon):
     return frame
 
 
-def run_vote_reset_sequence(sct, full_mon):
-    """Shift+R primary vote reset; single-pass ESC menu fallback."""
+def run_vote_reset_sequence(sct, full_mon, target_zone=None):
+    """ESC menu vote reset (Shift+R removed — never reliably works).
+
+    Retries the whole open -> settle -> click -> wait-for-map cycle a few times,
+    pausing briefly between attempts, so a single mis-timed or missed click
+    doesn't fail the reset outright.
+    """
     release_all_inputs()
     sleep_interruptible(0.50)
 
-    # Primary: Shift+R shortcut
-    print("[RST] sending Shift+R vote reset")
-    tap_key_shifted(VOTE_RESET_SHORTCUT_KEY, hold_time=0.06)
-    sleep_interruptible(VOTE_RESET_SHORTCUT_WAIT_SECONDS)
+    for attempt in range(1, VOTE_RESET_SEQUENCE_ATTEMPTS + 1):
+        if not _ensure_pause_menu_open(sct, full_mon):
+            print("[RST] pause menu not confirmed -> using force fallback")
+            if _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
+                return True
+        else:
+            # Small settle so the menu is fully open/clickable before the click.
+            if not sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3):
+                return False
+            if _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
+                tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
+                sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
+                map_visible, frame = wait_for_world_map(
+                    sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
+                if map_visible:
+                    return pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone)
 
-    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
-    sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
-
-    map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
-    if map_visible:
-        return pick_zone_from_open_map(sct, full_mon, frame)
-
-    # Fallback: single-pass ESC menu
-    print("[RST] Shift+R did not open map -> ESC menu fallback")
-    sleep_interruptible(0.30)
-
-    if not _ensure_pause_menu_open(sct, full_mon):
-        print("[RST] pause menu not confirmed -> using force fallback")
-        return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
-
-    sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3)
-
-    if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
-        return False
-
-    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
-    sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
-
-    map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
-    if map_visible:
-        return pick_zone_from_open_map(sct, full_mon, frame)
+        if attempt < VOTE_RESET_SEQUENCE_ATTEMPTS:
+            print(f"[RST] vote reset attempt {attempt}/{VOTE_RESET_SEQUENCE_ATTEMPTS} "
+                  f"failed -> retrying in {VOTE_RESET_RETRY_DELAY_SECONDS:.1f}s")
+            tap_key('esc', hold_time=0.10)  # close whatever is open before retrying
+            if not sleep_interruptible(VOTE_RESET_RETRY_DELAY_SECONDS):
+                return False
 
     print("[RST] vote reset failed after all retries")
     return False
 
 
-def pick_zone_from_open_map(sct, full_mon, frame=None):
-    """Find and click the satanic node (or fallback) on an already-open world map.
+def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None):
+    """Find and click a zone node on an already-open world map.
 
-    `frame` is an optional pre-captured BGR image of the open map; if None a
-    fresh frame is grabbed.  Returns True when the map closes (zone selected).
+    target_zone=None  → auto-detect the satanic (red-highlighted) node.
+    target_zone="Name" → skip CV scan, click the known fixed coordinate directly.
+    Returns True when the map closes (zone selected).
     """
     if frame is None:
         frame = grab_frame_bgr(sct, full_mon)
 
-    recentered_frame = _reopen_world_map_for_recenter(sct, full_mon)
-    red_node = None
-    scan_frame = recentered_frame if recentered_frame is not None else grab_frame_bgr(sct, full_mon)
+    _reopen_world_map_for_recenter(sct, full_mon)
+    scan_frame = grab_frame_bgr(sct, full_mon)
 
-    for attempt in range(1, SATANIC_NODE_SCAN_ATTEMPTS + 1):
-        if scan_frame is None:
-            scan_frame = grab_frame_bgr(sct, full_mon)
-        print(f"[SAT] scan attempt {attempt}/{SATANIC_NODE_SCAN_ATTEMPTS}")
-        red_node = _find_satanic_node(scan_frame)
-        if red_node is not None:
-            break
-        if attempt < SATANIC_NODE_SCAN_ATTEMPTS:
-            if not sleep_interruptible(SATANIC_NODE_SCAN_RETRY_SECONDS):
+    # ── fixed zone: click known coordinate directly, no CV scan ──────────────
+    if target_zone is not None:
+        coords = SATANIC_FIXED_NODES.get(target_zone)
+        if coords is not None:
+            fx, fy = coords
+            click_y = fy + SATANIC_NODE_CLICK_Y_OFFSET
+            print(f"[RST] fixed zone '{target_zone}' at ({fx}, {fy})")
+            r = SATANIC_NODE_CLICK_RING_RADIUS_PX
+            offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
+                       (r // 2, -r // 2), (-r // 2, -r // 2)]
+            result = _try_select_node_with_offsets(sct, full_mon, fx, click_y, offsets)
+            if not result:
+                # interrupted by stop signal — bail out entirely
+                if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
+                    return True
                 return False
-            scan_frame = grab_frame_bgr(sct, full_mon)
+            if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
+                return True
+            # All offset clicks processed but map still open → fall through to fallback
+            print("[RST] fixed zone clicks missed – trying fallback coordinate")
+        else:
+            print(f"[RST] unknown zone '{target_zone}' – falling back to satanic scan")
+            target_zone = None  # treat as satanic mode
 
-    if red_node is not None:
-        print(f"[RST] satanic node picked at {red_node}")
-        click_x = red_node[0] + SATANIC_NODE_CLICK_X_OFFSET
-        click_y = red_node[1] + SATANIC_NODE_CLICK_Y_OFFSET
-        r = SATANIC_NODE_CLICK_RING_RADIUS_PX
-        satanic_offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
-                           (r // 2, -r // 2), (-r // 2, -r // 2)]
-        if not _try_select_node_with_offsets(sct, full_mon, click_x, click_y, satanic_offsets):
-            return False
-        if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
-            return True
+    # ── satanic auto-detect (when target_zone is None) ────────────────────────
+    if target_zone is None:
+        red_node = None
+        for attempt in range(1, SATANIC_NODE_SCAN_ATTEMPTS + 1):
+            if scan_frame is None:
+                scan_frame = grab_frame_bgr(sct, full_mon)
+            print(f"[SAT] scan attempt {attempt}/{SATANIC_NODE_SCAN_ATTEMPTS}")
+            red_node = _find_satanic_node(scan_frame)
+            if red_node is not None:
+                break
+            if attempt < SATANIC_NODE_SCAN_ATTEMPTS:
+                if not sleep_interruptible(SATANIC_NODE_SCAN_RETRY_SECONDS):
+                    return False
+                scan_frame = grab_frame_bgr(sct, full_mon)
 
+        if red_node is not None:
+            print(f"[RST] satanic node picked at {red_node}")
+            click_x = red_node[0] + SATANIC_NODE_CLICK_X_OFFSET
+            click_y = red_node[1] + SATANIC_NODE_CLICK_Y_OFFSET + SATANIC_NODE_CLICK_Y_CORRECTION
+            r = SATANIC_NODE_CLICK_RING_RADIUS_PX
+            satanic_offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
+                               (r // 2, -r // 2), (-r // 2, -r // 2)]
+            if not _try_select_node_with_offsets(sct, full_mon, click_x, click_y, satanic_offsets):
+                return False
+            if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
+                return True
+
+    # ── fallback coordinate ───────────────────────────────────────────────────
     fallback_x = int(SCREEN_W * FALLBACK_NODE_X_FRAC)
     fallback_y = int(SCREEN_H * FALLBACK_NODE_Y_FRAC)
-    print(f"[RST] fallback node picked at ({fallback_x}, {fallback_y})")
+    print(f"[RST] fallback node at ({fallback_x}, {fallback_y})")
     if not _click_node_and_choose(fallback_x, fallback_y):
         return False
 

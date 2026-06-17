@@ -10,6 +10,7 @@ from config import (
     ITEM_STAR_MIN_SAT, ITEM_STAR_MIN_VAL,
     ITEM_STAR_MAX_CIRCULARITY, ITEM_STAR_MAX_SOLIDITY, ITEM_STAR_MIN_EXTENT,
     ITEM_STAR_MIN_ASPECT, ITEM_STAR_MAX_ASPECT, ITEM_STAR_TELEPORT_CYAN_MAX,
+    ORE_DOT_HUE_LO, ORE_DOT_HUE_HI, ORE_DOT_MIN_SAT, ORE_DOT_MIN_VAL,
     ROBOFLOW_API_KEY, ROBOFLOW_HEALTHBAR_ENABLED, ROBOFLOW_HEALTHBAR_CLASSES,
     ROBOFLOW_ENEMY_DUNGEON_ENABLED, ROBOFLOW_ENEMY_DUNGEON_CLASSES,
     ROBOFLOW_MINIMAP_VISION_ENABLED, ROBOFLOW_MINIMAP_VISION_CLASSES,
@@ -699,9 +700,11 @@ def classify_ore_dots(minimap_bgr):
     cx0, cy0 = w // 2, h // 2
     exclusion_radius = max(8, int(min(w, h) * 0.06))
 
-    # A broad high-saturation mask catches the ore icon first, then shape filters
-    # separate pickaxe-like markers from enemy circles/skulls.
-    mask = cv2.inRange(hsv, np.array([0, 35, 70]), np.array([180, 255, 255]))
+    # Ore icons are orange/gold. An orange-only mask (instead of "any saturated
+    # colour") keeps the shape filter from tagging red enemy dots, the orange
+    # companion duck, or item stars as ore.
+    mask = cv2.inRange(hsv, np.array([ORE_DOT_HUE_LO, ORE_DOT_MIN_SAT, ORE_DOT_MIN_VAL]),
+                       np.array([ORE_DOT_HUE_HI, 255, 255]))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 2), dtype=np.uint8), iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
 

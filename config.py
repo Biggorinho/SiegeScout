@@ -220,6 +220,15 @@ ITEM_STAR_MIN_ASPECT        = 0.5
 ITEM_STAR_MAX_ASPECT        = 2.0
 ITEM_STAR_TELEPORT_CYAN_MAX = 0.25  # patch cyan fraction above this = teleport
 
+# Minimap ore pickaxes are orange/gold. The old detector matched ANY saturated
+# colour and leaned on shape alone, so it tagged red enemy dots, the orange
+# companion duck, and even item stars as "ore". Restricting to the orange hue
+# removes those false positives while keeping real ore.
+ORE_DOT_HUE_LO  = 10
+ORE_DOT_HUE_HI  = 26
+ORE_DOT_MIN_SAT = 100
+ORE_DOT_MIN_VAL = 100
+
 ENABLE_MINING                         = False
 ENABLE_LOOT_ITEMS                     = False
 MINING_SCAN_INTERVAL_SECONDS          = 0.10
@@ -246,6 +255,9 @@ MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-m
 # Once standing on/near a minimap-targeted resource, items and ore are both
 # collected by pressing F; ore needs a second F this many seconds later to mine.
 RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS  = 0.5
+# Loot sweep: when combat ends, defer the vote-reset for up to this long while the
+# resource targeter is still actively collecting items/ore from the minimap.
+LOOT_SWEEP_MAX_SECONDS                  = 12.0
 
 # ── debug snapshots + detection telemetry ────────────────────────────────
 ENABLE_DEBUG_SNAPSHOTS              = False
@@ -288,9 +300,13 @@ VOTE_RESET_CLICK_Y_SWEEP_FRAC    = 0.015
 VOTE_RESET_FIXED_CLICK_X_PX      = _px(957)
 VOTE_RESET_FIXED_CLICK_Y_PX      = _px(485)
 VOTE_RESET_INTERACT_KEY          = 'f'
-VOTE_RESET_MENU_SETTLE_SECONDS   = 0.40
+VOTE_RESET_MENU_SETTLE_SECONDS   = 0.70   # wait after the menu opens before clicking vote-reset
 VOTE_RESET_CLICK_RETRY_DELAY     = 0.60
 VOTE_RESET_CLICK_ATTEMPTS        = 2
+# Retry the whole ESC->settle->click->wait cycle this many times before giving up,
+# pausing this long between attempts (so a single missed click isn't fatal).
+VOTE_RESET_SEQUENCE_ATTEMPTS     = 3
+VOTE_RESET_RETRY_DELAY_SECONDS   = 1.5
 VOTE_RESET_SHORTCUT_KEY            = 'r'
 VOTE_RESET_SHORTCUT_WAIT_SECONDS   = 3.0
 SATANIC_NODE_SCAN_ATTEMPTS       = 5
