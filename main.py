@@ -259,11 +259,7 @@ def run(
     pause_menu_frames            = 0
     options_menu_frames          = 0
     inventory_panel_frames       = 0
-    world_map_frames             = 0
-    last_safe_zone_probe_t       = 0.0
     MENU_CONFIRM_FRAMES_LOCAL    = 2
-    SAFE_ZONE_PROBE_DELAY_SECONDS    = 8.0   # no combat this long after zone start -> likely safe zone
-    SAFE_ZONE_PROBE_INTERVAL_SECONDS = 4.0   # tap F (waystone) at most this often
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
     last_health_potion_t         = 0.0
@@ -717,21 +713,6 @@ def run(
                     inventory_panel_frames = 0
                     continue
 
-                # Map selection (world map) open outside the vote-reset routine:
-                # pick a zone instead of idling/exploring. is_world_map_visible is
-                # reliable, so this is the bot's explicit "I'm at map selection" state.
-                if is_world_map_visible(frame):
-                    world_map_frames += 1
-                else:
-                    world_map_frames = 0
-                if world_map_frames >= MENU_CONFIRM_FRAMES_LOCAL:
-                    print("[MAP] map selection detected -> picking zone")
-                    world_map_frames = 0
-                    if pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone):
-                        _do_zone_reset()
-                    menu_escape_cooldown_until = now_loop + 0.8
-                    continue
-
             # ── capture minimap ───────────────────────────────────────────────
             minimap_region = get_minimap_region(minimap_mode)
             minimap        = cv2.cvtColor(np.array(sct.grab(minimap_region)), cv2.COLOR_BGRA2BGR)
@@ -1112,20 +1093,6 @@ def run(
                     attack_held = False
 
                 if time.time() < explore_pause_until:
-                    sleep_interruptible(0.05)
-                    continue
-
-                # Safe-zone recovery: after a reset the bot can land on the safe-zone
-                # waystone. If no enemy has EVER appeared in this zone (combat zones
-                # engage within a few seconds) and the map isn't open, tap F to use
-                # the waystone — the map-selection handler above then picks a zone.
-                if not vote_reset_in_progress and not zone_had_attack \
-                        and not confirmed_enemy_now \
-                        and (now_loop - zone_started_t) >= SAFE_ZONE_PROBE_DELAY_SECONDS \
-                        and (now_loop - last_safe_zone_probe_t) >= SAFE_ZONE_PROBE_INTERVAL_SECONDS:
-                    print("[SAFE?] no combat in zone -> tapping F (waystone) to open map")
-                    last_safe_zone_probe_t = now_loop
-                    tap_key('f', hold_time=0.06)
                     sleep_interruptible(0.05)
                     continue
 

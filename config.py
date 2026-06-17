@@ -300,13 +300,9 @@ VOTE_RESET_CLICK_Y_SWEEP_FRAC    = 0.015
 VOTE_RESET_FIXED_CLICK_X_PX      = _px(957)
 VOTE_RESET_FIXED_CLICK_Y_PX      = _px(485)
 VOTE_RESET_INTERACT_KEY          = 'f'
-VOTE_RESET_MENU_SETTLE_SECONDS   = 0.70   # wait after the menu opens before clicking vote-reset
+VOTE_RESET_MENU_SETTLE_SECONDS   = 0.40
 VOTE_RESET_CLICK_RETRY_DELAY     = 0.60
 VOTE_RESET_CLICK_ATTEMPTS        = 2
-# Retry the whole ESC->settle->click->wait cycle this many times before giving up,
-# pausing this long between attempts (so a single missed click isn't fatal).
-VOTE_RESET_SEQUENCE_ATTEMPTS     = 3
-VOTE_RESET_RETRY_DELAY_SECONDS   = 1.5
 VOTE_RESET_SHORTCUT_KEY            = 'r'
 VOTE_RESET_SHORTCUT_WAIT_SECONDS   = 3.0
 SATANIC_NODE_SCAN_ATTEMPTS       = 5

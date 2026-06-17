@@ -17,7 +17,6 @@ from config import (
     VOTE_RESET_CLICK_Y_SWEEP_FRAC,
     VOTE_RESET_FIXED_CLICK_X_PX, VOTE_RESET_FIXED_CLICK_Y_PX,
     VOTE_RESET_CLICK_ATTEMPTS,
-    VOTE_RESET_SEQUENCE_ATTEMPTS, VOTE_RESET_RETRY_DELAY_SECONDS,
     SATANIC_NODE_SCAN_ATTEMPTS, SATANIC_NODE_SCAN_RETRY_SECONDS,
     DEATH_RESPAWN_X_FRAC, DEATH_RESPAWN_Y_FRAC,
     DEATH_RESPAWN_CLICK_ATTEMPTS, DEATH_RESPAWN_RING_RADIUS_PX,
@@ -616,25 +615,15 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     vote_x = VOTE_RESET_FIXED_CLICK_X_PX
     vote_y = VOTE_RESET_FIXED_CLICK_Y_PX
 
-    # The menu's row count varies (5 vs 7 rows), so the vote-reset button moves.
-    # Click the DETECTED row first (most accurate), then fall back to the fixed y
-    # plus a small downward sweep.
-    candidate_ys = []
+    target_y = vote_y
     if rows:
-        selected = _select_vote_reset_row(rows, vote_y)
-        if selected is not None:
-            candidate_ys.append(int(selected[0]))
-            print(f"[RST] vote reset detector row y={int(selected[0])} (+ fixed y={vote_y}, {len(rows)} rows)")
+        selected = _select_vote_reset_row(rows, target_y)
+        selected_y = selected[0] if selected is not None else target_y
+        print(f"[RST] vote reset detector row y={selected_y} -> fixed click y={vote_y} (target={target_y}, {len(rows)} rows)")
     else:
         print(f"[RST] vote reset fallback y={vote_y} (no rows detected)")
-    for i in range(max(1, attempts)):
-        candidate_ys.append(vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC))
-
-    seen = set()
-    for y_i in candidate_ys:
-        if y_i in seen:
-            continue
-        seen.add(y_i)
+    for i in range(attempts):
+        y_i = vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC)
         left_click_at(vote_x, y_i, hold_time=0.08)
         if not sleep_interruptible(0.12):
             return False
@@ -780,38 +769,25 @@ def _reopen_world_map_for_recenter(sct, full_mon):
 
 
 def run_vote_reset_sequence(sct, full_mon, target_zone=None):
-    """ESC menu vote reset (Shift+R removed — never reliably works).
-
-    Retries the whole open -> settle -> click -> wait-for-map cycle a few times,
-    pausing briefly between attempts, so a single mis-timed or missed click
-    doesn't fail the reset outright.
-    """
+    """ESC menu vote reset (Shift+R removed — never reliably works)."""
     release_all_inputs()
     sleep_interruptible(0.50)
 
-    for attempt in range(1, VOTE_RESET_SEQUENCE_ATTEMPTS + 1):
-        if not _ensure_pause_menu_open(sct, full_mon):
-            print("[RST] pause menu not confirmed -> using force fallback")
-            if _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
-                return True
-        else:
-            # Small settle so the menu is fully open/clickable before the click.
-            if not sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3):
-                return False
-            if _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
-                tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
-                sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
-                map_visible, frame = wait_for_world_map(
-                    sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
-                if map_visible:
-                    return pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone)
+    if not _ensure_pause_menu_open(sct, full_mon):
+        print("[RST] pause menu not confirmed -> using force fallback")
+        return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
 
-        if attempt < VOTE_RESET_SEQUENCE_ATTEMPTS:
-            print(f"[RST] vote reset attempt {attempt}/{VOTE_RESET_SEQUENCE_ATTEMPTS} "
-                  f"failed -> retrying in {VOTE_RESET_RETRY_DELAY_SECONDS:.1f}s")
-            tap_key('esc', hold_time=0.10)  # close whatever is open before retrying
-            if not sleep_interruptible(VOTE_RESET_RETRY_DELAY_SECONDS):
-                return False
+    sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3)
+
+    if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
+        return False
+
+    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
+    sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
+
+    map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
+    if map_visible:
+        return pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone)
 
     print("[RST] vote reset failed after all retries")
     return False
