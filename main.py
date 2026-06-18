@@ -105,6 +105,7 @@ from pathfinding import (
     minimap_explore_target,
 )
 from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator, ResourceTargeter, DetectionCounters, TemporalDotConfidence
+from screen_motion import ScreenMotionDetector
 from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
@@ -202,6 +203,11 @@ def run(
     last_backtrack_t             = [0.0]
     explore_heatmap              = ExploreHeatMap()
     explore_navigator            = ExploreNavigator()
+    screen_motion                = ScreenMotionDetector(
+        window=_cfg.SCREEN_MOTION_WINDOW,
+        static_shift_px=_cfg.SCREEN_MOTION_STATIC_PX,
+    )
+    last_motion_log_t            = 0.0
     resource_targeter            = ResourceTargeter(
         memory_seconds=MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
         max_travel_seconds=MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
@@ -350,6 +356,7 @@ def run(
         explore_heatmap.reset()
         terrain_memory.reset()
         sector_tracker.reset()
+        screen_motion.reset()  # new zone = scene jump; forget camera-shift history
         escape_committed_until = 0.0
         escape_dx, escape_dy   = 0, 0
         explore_held_keys      = explore_move_stop(explore_held_keys)
@@ -691,15 +698,20 @@ def run(
                 else:
                     inventory_panel_frames = 0
 
-                if options_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL:
-                    print("[MENU] options menu detected — ESC")
+                # A real pause/options menu freezes the game (screen static); the
+                # red beam attacks that trip these detectors happen during active
+                # play (screen moving). Only ESC when the world is actually static,
+                # so combat beams can't cause a stray ESC that opens the real menu.
+                menu_screen_static = screen_motion.is_static()
+                if options_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL and menu_screen_static:
+                    print("[MENU] options menu detected (paused) — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
                     options_menu_frames = 0
                     continue
-                if pause_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL:
-                    print("[MENU] pause menu detected — ESC")
+                if pause_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL and menu_screen_static:
+                    print("[MENU] pause menu detected (paused) — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
@@ -716,6 +728,14 @@ def run(
             # ── capture minimap ───────────────────────────────────────────────
             minimap_region = get_minimap_region(minimap_mode)
             minimap        = cv2.cvtColor(np.array(sct.grab(minimap_region)), cv2.COLOR_BGRA2BGR)
+
+            # Camera-shift / "am I physically moving?" — measured off the on-screen
+            # world (menus already handled/continued above, so this is gameplay).
+            screen_motion.update(frame)
+            if _cfg.ENABLE_SCREEN_MOTION_LOG and (now_loop - last_motion_log_t) >= _cfg.SCREEN_MOTION_LOG_INTERVAL:
+                _shift = screen_motion.recent_shift()
+                print(f"[MOTION] shift={_shift:.2f}px {'static' if screen_motion.is_static() else 'moving'} (state={state.name})")
+                last_motion_log_t = now_loop
 
             if hp is not None:
                 if hp <= HP_ZERO_DEAD_THRESHOLD:
@@ -1163,23 +1183,37 @@ def run(
                                 wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
                                 sleep_interruptible(0.03)
                                 continue
+                        elif rt_target is not None and rt_target.kind == "ore":
+                            # Mining: stand next to the ore, press F, wait ~0.5s, press F.
+                            tap_key('f', hold_time=0.04)
+                            sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
+                            tap_key('f', hold_time=0.04)
+                            sleep_interruptible(0.05)
+                            continue
                         elif rt_target is not None:
-                            # Items drive LOOTING, ore drives MINING — different in-game
-                            # mechanics, so handle each kind separately. No mark_attempted:
-                            # keep working the resource until it's gone (marker vanishes →
-                            # target released) or the targeter's close-attempt times out.
-                            if rt_target.kind == "ore":
-                                # Mining: stand next to the ore, press F, wait ~0.5s,
-                                # then press F again.
-                                tap_key('f', hold_time=0.04)
-                                sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
-                                tap_key('f', hold_time=0.04)
-                            else:
-                                # Looting: nudge onto the star and spam F until grabbed.
-                                idx, idy = dot_to_screen_delta(rt_target.pos, center)
-                                if abs(idx) + abs(idy) > 6:
-                                    wasd_move(idx, idy, 0.08)
-                                tap_key('f', hold_time=0.04)
+                            # Item: LOOT by clicking its coloured name/tier label — the
+                            # character then auto-walks onto it and picks it up. Don't issue
+                            # any other input until the label is gone, or it cancels the walk.
+                            tags = find_item_tags_on_screen(frame)
+                            if tags:
+                                px, py = SCREEN_W // 2, SCREEN_H // 2
+                                tx, ty, _ = min(tags, key=lambda t: (t[0]-px)**2 + (t[1]-py)**2)
+                                print("[LOOT] item label on screen -> click + collect")
+                                left_click_at(int(tx), int(ty), hold_time=0.05)
+                                _pick_until = time.time() + _cfg.ITEM_PICKUP_WAIT_SECONDS
+                                while time.time() < _pick_until:
+                                    if stop_event is not None and stop_event.is_set():
+                                        break
+                                    _pf = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
+                                    if not find_item_tags_on_screen(_pf):
+                                        break  # label gone = picked up
+                                    sleep_interruptible(0.15)
+                                resource_targeter.mark_attempted(now_loop)
+                                continue
+                            # No label on-screen yet — nudge toward the dot to bring it in view.
+                            idx, idy = dot_to_screen_delta(rt_target.pos, center)
+                            if abs(idx) + abs(idy) > 6:
+                                wasd_move(idx, idy, 0.08)
                             sleep_interruptible(0.05)
                             continue
                         # Target None — fall through to the on-screen handlers below.
@@ -1287,6 +1321,13 @@ def run(
                 explore_intent_stuck.update(minimap, explore_dx, explore_dy)
 
                 explore_is_stuck = stuck.is_stuck() or explore_intent_stuck.is_stuck()
+                # Camera-shift signal: in EXPLORE the world should scroll; if it's
+                # static the bot is walking into geometry. (Loot pickups continue
+                # earlier, so this only sees genuine free-exploration stalls.)
+                if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
+                    if not explore_is_stuck:
+                        print(f"[MOTION] world not scrolling ({screen_motion.recent_shift():.2f}px) -> stuck")
+                    explore_is_stuck = True
 
                 # Honour escape commitment — hold escape direction, suppress navigator.
                 if now_loop < escape_committed_until:

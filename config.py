@@ -158,6 +158,16 @@ DARK_MINIMAP_MEDIAN_V      = 20    # median V below this → dark-zone model
 DARK_DISC_RADIUS_FRAC      = 0.95  # fraction of the half-min-dimension used as the disc
 DARK_WALL_MIN_V            = 140   # V at/above this (low sat) counts as a wall structure
 
+# Screen-motion (camera-shift) detection — "is the player physically moving?"
+# Measures how far the centre-screen world scrolls between frames. Logging is on
+# so the real moving-vs-stuck values can be read from a run; the stuck hook stays
+# OFF until SCREEN_MOTION_STATIC_PX is calibrated to those values.
+ENABLE_SCREEN_MOTION_LOG   = True   # print rate-limited [MOTION] shift values
+ENABLE_SCREEN_MOTION_STUCK = True   # use camera-static as an explore stuck signal
+SCREEN_MOTION_WINDOW       = 6
+SCREEN_MOTION_STATIC_PX    = 1.2    # calibrated: static ~0.4-0.95px, moving >=1.36px
+SCREEN_MOTION_LOG_INTERVAL = 2.0
+
 TERRAIN_BLOCKED_PATCH_RADIUS           = _px(14)
 TERRAIN_BLOCKED_MARK_AHEAD_PX          = _px(12)
 TERRAIN_BLOCKED_MARK_STRENGTH          = 90
@@ -219,6 +229,10 @@ ITEM_STAR_MIN_EXTENT        = 0.26  # reject the thinnest map slivers (keeps thi
 ITEM_STAR_MIN_ASPECT        = 0.5
 ITEM_STAR_MAX_ASPECT        = 2.0
 ITEM_STAR_TELEPORT_CYAN_MAX = 0.25  # patch cyan fraction above this = teleport
+
+# After clicking a dropped item's label, the character auto-walks to it and
+# picks it up; wait this long (no other input) for that to finish.
+ITEM_PICKUP_WAIT_SECONDS = 3.0
 
 # Minimap ore pickaxes are orange/gold. The old detector matched ANY saturated
 # colour and leaned on shape alone, so it tagged red enemy dots, the orange
