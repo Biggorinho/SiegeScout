@@ -86,6 +86,7 @@ from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible,
     is_pause_menu_visible, is_options_menu_visible, is_inventory_panel_visible,
+    is_mining_prompt_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
     init_healthbar_detector, detect_healthbars,
@@ -1184,10 +1185,19 @@ def run(
                                 sleep_interruptible(0.03)
                                 continue
                         elif rt_target is not None and rt_target.kind == "ore":
-                            # Mining: stand next to the ore, press F, wait ~0.5s, press F.
-                            tap_key('f', hold_time=0.04)
-                            sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
-                            tap_key('f', hold_time=0.04)
+                            # Mining: only mine once the "F Mining" prompt is up (the
+                            # character is positioned next to the ore). Mine = F, wait
+                            # ~0.5s, F. Otherwise nudge closer to bring the prompt up.
+                            if is_mining_prompt_visible(frame):
+                                print("[MINE] F-prompt up -> mining")
+                                tap_key('f', hold_time=0.04)
+                                sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
+                                tap_key('f', hold_time=0.04)
+                                resource_targeter.mark_attempted(now_loop)
+                            else:
+                                odx, ody = dot_to_screen_delta(rt_target.pos, center)
+                                if abs(odx) + abs(ody) > 6:
+                                    wasd_move(odx, ody, 0.08)
                             sleep_interruptible(0.05)
                             continue
                         elif rt_target is not None:

@@ -11,6 +11,7 @@ from config import (
     ITEM_STAR_MAX_CIRCULARITY, ITEM_STAR_MAX_SOLIDITY, ITEM_STAR_MIN_EXTENT,
     ITEM_STAR_MIN_ASPECT, ITEM_STAR_MAX_ASPECT, ITEM_STAR_TELEPORT_CYAN_MAX,
     ORE_DOT_HUE_LO, ORE_DOT_HUE_HI, ORE_DOT_MIN_SAT, ORE_DOT_MIN_VAL,
+    MINING_PROMPT_MIN_WIDTH_FRAC, MINING_PROMPT_MIN_ASPECT,
     ROBOFLOW_API_KEY, ROBOFLOW_HEALTHBAR_ENABLED, ROBOFLOW_HEALTHBAR_CLASSES,
     ROBOFLOW_ENEMY_DUNGEON_ENABLED, ROBOFLOW_ENEMY_DUNGEON_CLASSES,
     ROBOFLOW_MINIMAP_VISION_ENABLED, ROBOFLOW_MINIMAP_VISION_CLASSES,
@@ -517,6 +518,37 @@ def find_items_on_screen(frame_bgr, templates):
     return best_pt
 
 
+def is_mining_prompt_visible(frame_bgr):
+    """Detect the 'F Mining' interact prompt above the character.
+
+    When standing next to an ore the game shows a dark 'F' keycap + white
+    'MINING' text. Detected as a wide horizontal white-text bar in the
+    central-upper area (frame-relative size = resolution-independent)."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+    h, w = frame_bgr.shape[:2]
+    x0, x1 = int(w * 0.30), int(w * 0.72)
+    y0, y1 = int(h * 0.28), int(h * 0.52)
+    roi = frame_bgr[y0:y1, x0:x1]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    white = cv2.inRange(hsv, np.array([0, 0, 170]), np.array([180, 80, 255]))
+    # Merge the individual letters into a single horizontal bar.
+    kw = max(9, int(w * 0.02))
+    white = cv2.dilate(white, np.ones((1, kw), dtype=np.uint8), iterations=1)
+    white = cv2.morphologyEx(white, cv2.MORPH_CLOSE, np.ones((3, kw), dtype=np.uint8))
+
+    min_width = w * MINING_PROMPT_MIN_WIDTH_FRAC
+    contours, _ = cv2.findContours(white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for cnt in contours:
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        if bw >= min_width and (bw / float(max(1, bh))) >= MINING_PROMPT_MIN_ASPECT:
+            return True
+    return False
+
+
 def grab_frame_bgr(sct, full_mon):
     return cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
 
@@ -532,20 +564,48 @@ def is_world_map_visible(frame_bgr):
     return blue_ratio > 0.0008 and purple_ratio > 0.10
 
 
+def _evenly_stacked_buttons(bars, min_count=3):
+    """True if `bars` (each (top_y, width)) contain a run of >= min_count entries
+    that are evenly spaced vertically and of similar width — the signature of a
+    real button menu vs. sparse red combat beams."""
+    bars = sorted(bars)
+    n = len(bars)
+    for i in range(n):
+        for j in range(i + 1, n):
+            gap = bars[j][0] - bars[i][0]
+            if gap <= 0:
+                continue
+            run = [bars[i], bars[j]]
+            expected = bars[j][0] + gap
+            for k in range(j + 1, n):
+                if abs(bars[k][0] - expected) <= 0.35 * gap:
+                    run.append(bars[k])
+                    expected = bars[k][0] + gap
+            if len(run) >= min_count:
+                widths = [b[1] for b in run]
+                if max(widths) / float(max(1, min(widths))) <= 1.6:
+                    return True
+    return False
+
+
 def is_pause_menu_visible(frame_bgr):
-    """Detect ESC pause menu by stacked red button rows in the center area."""
+    """Detect the ESC pause menu by its evenly-stacked red button rows.
+
+    Requires >= 3 similar-width, evenly-spaced, centered red bars (Resume / Vote
+    Reset / Options / Save & Exit). The stack requirement is what rejects the red
+    beam attacks that used to false-trigger a single ">= 2 bars" check."""
     if frame_bgr is None or frame_bgr.size == 0:
         return False
 
     h, w = frame_bgr.shape[:2]
     x0, x1 = int(w * 0.28), int(w * 0.72)
-    y0, y1 = int(h * 0.28), int(h * 0.78)
+    y0, y1 = int(h * 0.28), int(h * 0.82)
     roi = frame_bgr[y0:y1, x0:x1]
     if roi.size == 0:
         return False
+    rw = roi.shape[1]
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    # Keep the hue gate but allow darker/desaturated red menu skins.
     r1 = cv2.inRange(hsv, np.array([0, 45, 38]), np.array([20, 255, 255]))
     r2 = cv2.inRange(hsv, np.array([160, 45, 38]), np.array([180, 255, 255]))
     red = cv2.bitwise_or(r1, r2)
@@ -553,25 +613,20 @@ def is_pause_menu_visible(frame_bgr):
     red = cv2.morphologyEx(red, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
 
     contours, _ = cv2.findContours(red, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    bar_count = 0
+    bars = []
     for cnt in contours:
         x, y, bw, bh = cv2.boundingRect(cnt)
-        area = cv2.contourArea(cnt)
-        if area < 420:
+        if bw < rw * 0.16:
             continue
-        if bw < int((x1 - x0) * 0.16):
-            continue
-        if not (18 <= bh <= 90):
+        if not (h * 0.02 <= bh <= h * 0.11):   # frame-relative -> resolution-independent
             continue
         if (bw / max(1, bh)) < 1.8:
             continue
-        # Pause menu buttons are mostly centered horizontally.
-        cx = x + bw * 0.5
-        if abs(cx - (roi.shape[1] * 0.5)) > roi.shape[1] * 0.22:
+        if abs((x + bw * 0.5) - rw * 0.5) > rw * 0.25:  # centered
             continue
-        bar_count += 1
+        bars.append((y, bw))
 
-    return bar_count >= 2
+    return _evenly_stacked_buttons(bars, min_count=3)
 
 
 def is_options_menu_visible(frame_bgr):

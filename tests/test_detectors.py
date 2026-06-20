@@ -12,6 +12,8 @@ from detectors import (
     classify_item_dots,
     classify_ore_dots,
     is_world_map_visible,
+    is_mining_prompt_visible,
+    is_pause_menu_visible,
 )
 
 
@@ -124,6 +126,29 @@ def test_is_world_map_visible_detects_map_selection():
 def test_is_world_map_visible_false_in_safe_zone():
     """The safe zone is NOT the world map — must not be mistaken for map selection."""
     assert is_world_map_visible(_fixture("safe_zone.png")) is False
+
+
+def test_is_pause_menu_visible_detects_real_menu():
+    """The real 4-button pause menu (evenly-stacked red bars) is detected."""
+    assert is_pause_menu_visible(_fixture("pause_menu.png")) is True
+
+
+def test_is_pause_menu_visible_false_on_non_menu():
+    """Safe zone, world map, item drops, and mining prompt are not the pause menu
+    (and red combat beams can't form an evenly-stacked button stack)."""
+    for name in ("safe_zone.png", "map_selection.png", "item_heroic.png", "mining_prompt.png"):
+        assert is_pause_menu_visible(_fixture(name)) is False, f"false menu in {name}"
+
+
+def test_is_mining_prompt_visible_detects_prompt():
+    """The 'F Mining' prompt (wide white text bar above the character) is detected."""
+    assert is_mining_prompt_visible(_fixture("mining_prompt.png")) is True
+
+
+def test_is_mining_prompt_visible_false_without_prompt():
+    """Item-drop / safe-zone scenes have no mining prompt."""
+    for name in ("item_heroic.png", "item_red.png", "safe_zone.png"):
+        assert is_mining_prompt_visible(_fixture(name)) is False, f"false prompt in {name}"
 
 
 def test_classify_ore_dots_finds_real_ore():
