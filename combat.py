@@ -549,9 +549,16 @@ def _find_pause_menu_button_rows(frame_bgr):
                 continue
             if bw < int(roi.shape[1] * 0.20):
                 continue
+            if bw > int(roi.shape[1] * 0.80):   # too wide = button fused with side clutter
+                continue
             if not (12 <= bh <= 135):
                 continue
             if (bw / max(1, bh)) < 1.2:
+                continue
+            # Menu buttons are horizontally centred; reject off-centre red clutter
+            # (campfires, skill icons, world glows) that otherwise false-confirms.
+            cx = x + bw / 2.0
+            if abs(cx - roi.shape[1] / 2.0) > roi.shape[1] * 0.22:
                 continue
             rows.append((y0 + y + bh // 2, area, bw))
         return rows
@@ -637,26 +644,25 @@ def _select_vote_reset_row(rows, target_y):
     return None  # no clean stack -> don't guess
 
 
-_MENU_DUMP_MAX = 8
-_menu_dump_count = 0
+_DEBUG_DUMP_MAX = 10
+_debug_dump_count = 0
 
 
-def _dump_under_detected_menu(frame, n_rows):
-    """Save the pause-menu frame when fewer than 4 buttons were detected, so the
-    2-row read can be diagnosed. Capped per session; written to a subdir so the
-    debug recorder's *.png rotation doesn't delete it."""
-    global _menu_dump_count
-    if _menu_dump_count >= _MENU_DUMP_MAX:
+def _dump_debug_frame(frame, prefix):
+    """Save a frame to debug/menu_dumps/ for diagnosis. Capped per session; in a
+    subdir so the debug recorder's *.png rotation doesn't delete it."""
+    global _debug_dump_count
+    if _debug_dump_count >= _DEBUG_DUMP_MAX or frame is None:
         return
     try:
         import os
         import time as _time
         d = os.path.join("debug", "menu_dumps")
         os.makedirs(d, exist_ok=True)
-        path = os.path.join(d, f"pausemenu_{n_rows}rows_{int(_time.time())}.png")
+        path = os.path.join(d, f"{prefix}_{int(_time.time())}.png")
         if cv2.imwrite(path, frame):
-            _menu_dump_count += 1
-            print(f"[RST] saved under-detected menu ({n_rows} rows) -> {path}")
+            _debug_dump_count += 1
+            print(f"[RST] saved debug frame -> {path}")
     except Exception:
         pass
 
@@ -678,7 +684,7 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     else:
         click_y = vote_y
         print(f"[RST] vote reset fallback fixed y={vote_y} ({len(rows)} rows)")
-        _dump_under_detected_menu(frame, len(rows))
+        _dump_debug_frame(frame, f"pausemenu_{len(rows)}rows")
 
     left_click_at(vote_x, click_y, hold_time=0.08)
     if not sleep_interruptible(0.12):
@@ -914,6 +920,9 @@ def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None):
                 return True
 
     # ── fallback coordinate ───────────────────────────────────────────────────
+    # Reaching here means the satanic node scan failed or its click didn't close
+    # the map — capture the world map for diagnosis.
+    _dump_debug_frame(scan_frame, "worldmap_fail")
     fallback_x = int(SCREEN_W * FALLBACK_NODE_X_FRAC)
     fallback_y = int(SCREEN_H * FALLBACK_NODE_Y_FRAC)
     print(f"[RST] fallback node at ({fallback_x}, {fallback_y})")
