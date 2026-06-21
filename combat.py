@@ -606,7 +606,10 @@ def _select_vote_reset_row(rows, target_y):
     unlike picking the row nearest a fixed target_y (which lands on Options when
     the menu sits lower in combat zones). Falls back to nearest-target_y only if
     no clean stack is found."""
-    if not rows:
+    # Need the full 4-button stack to know which row is Vote Reset. Fewer rows =
+    # can't tell -> return None so the caller uses the safe calibrated Y. NEVER
+    # guess a nearest-target row: that can return Save & Exit and close the game.
+    if not rows or len(rows) < 4:
         return None
 
     rows = sorted(rows, key=lambda item: item[0])
@@ -631,7 +634,7 @@ def _select_vote_reset_row(rows, target_y):
     if best_window is not None:
         return best_window[1]  # Resume[0] / >Vote Reset[1]< / Options[2] / Save & Exit[3]
 
-    return min(rows, key=lambda r: abs(r[0] - target_y))
+    return None  # no clean stack -> don't guess
 
 
 def _click_vote_reset_menu_button(sct, full_mon, attempts):
@@ -640,36 +643,37 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     vote_x = VOTE_RESET_FIXED_CLICK_X_PX
     vote_y = VOTE_RESET_FIXED_CLICK_Y_PX
 
-    # Primary: click the DETECTED Vote Reset row (2nd of the button stack), which
-    # tracks the menu wherever it renders. Fallback: the calibrated fixed Y, then
-    # a small downward sweep.
-    candidate_ys = []
+    # Click the confidently-detected Vote Reset row (2nd of the 4-button stack);
+    # otherwise the calibrated fixed Y. NEVER sweep downward and NEVER click the
+    # bottom button — Save & Exit lives there and closes the game.
     selected = _select_vote_reset_row(rows, vote_y) if rows else None
     if selected is not None:
-        candidate_ys.append(int(selected[0]))
-        print(f"[RST] vote reset = stack 2nd row y={int(selected[0])} ({len(rows)} rows)")
+        click_y = int(selected[0])
+        print(f"[RST] vote reset = stack 2nd row y={click_y} ({len(rows)} rows)")
     else:
+        click_y = vote_y
         print(f"[RST] vote reset fallback fixed y={vote_y} ({len(rows)} rows)")
-    for i in range(max(1, attempts)):
-        candidate_ys.append(vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC))
 
-    seen = set()
-    for y_i in candidate_ys:
-        if y_i in seen:
-            continue
-        seen.add(y_i)
-        left_click_at(vote_x, y_i, hold_time=0.08)
-        if not sleep_interruptible(0.12):
+    # Hard safety: refuse to click the bottom-most detected button (Save & Exit).
+    if rows and len(rows) >= 2:
+        bottom_y = max(r[0] for r in rows)
+        guard = max(12, int(SCREEN_H * 0.02))
+        if click_y >= bottom_y - guard and click_y != vote_y:
+            print("[RST] guard: target near bottom button (Save & Exit) -> fixed y")
+            click_y = vote_y
+        if click_y >= bottom_y - guard:
+            print("[RST] no safe Vote Reset target -> abort click (won't risk Save & Exit)")
             return False
-        post_frame = grab_frame_bgr(sct, full_mon)
-        if is_options_menu_visible(post_frame):
-            print("[RST] click landed on Options — ESC back to pause menu")
-            tap_key('esc', hold_time=0.12)
-            if not sleep_interruptible(0.55):
-                return False
-            continue  # wrong button — try the next candidate
-        if not is_pause_menu_visible(post_frame):
-            return True  # menu closed -> Vote Reset took effect
+
+    left_click_at(vote_x, click_y, hold_time=0.08)
+    if not sleep_interruptible(0.12):
+        return False
+    post_frame = grab_frame_bgr(sct, full_mon)
+    if is_options_menu_visible(post_frame):
+        print("[RST] click landed on Options — ESC back to pause menu")
+        tap_key('esc', hold_time=0.12)
+        sleep_interruptible(0.55)
+        return False
     return True
 
 

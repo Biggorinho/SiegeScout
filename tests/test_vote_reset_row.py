@@ -41,6 +41,14 @@ def test_select_vote_reset_is_position_independent():
     assert 355 <= sel[0] <= 382, f"expected shifted Vote Reset (~368), got {sel[0]}"
 
 
+def test_select_vote_reset_returns_none_without_full_stack():
+    """SAFETY: with <4 detected rows we can't tell which is Vote Reset, so it must
+    return None (caller uses the safe fixed Y) — never guess a nearest-target row,
+    which previously returned y=644 = Save & Exit and closed the game."""
+    rows = [(419, 5000, 259), (644, 5000, 259)]  # only 2 rows, e.g. Resume + Save&Exit
+    assert combat._select_vote_reset_row(rows, 485) is None
+
+
 _COMBAT = Path(__file__).resolve().parent / "fixtures" / "pause_menu_combat.png"
 
 
