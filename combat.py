@@ -571,24 +571,48 @@ def _find_pause_menu_button_rows(frame_bgr):
 
     rows.sort(key=lambda item: item[0])
 
+    # Each button renders as ~2 red bars at full resolution (border + body), so
+    # merge bars belonging to the same button into a single centred row. The gap
+    # is frame-relative: within-button gaps fall under it, between-button gaps
+    # above it, at any resolution.
+    merge_dist = max(18, int(h * 0.035))
     deduped = []
-    for row_y, area, bw in rows:
-        if not deduped or abs(row_y - deduped[-1][0]) > 18:
-            deduped.append((row_y, area, bw))
+    group = []
+    for row in rows:
+        if group and (row[0] - group[-1][0]) <= merge_dist:
+            group.append(row)
+        else:
+            if group:
+                ys = [g[0] for g in group]
+                deduped.append((sum(ys) // len(ys),
+                                max(g[1] for g in group),
+                                max(g[2] for g in group)))
+            group = [row]
+    if group:
+        ys = [g[0] for g in group]
+        deduped.append((sum(ys) // len(ys),
+                        max(g[1] for g in group),
+                        max(g[2] for g in group)))
 
     return deduped
 
 
 def _select_vote_reset_row(rows, target_y):
+    """Return the Vote Reset row.
+
+    The pause menu is Resume / Vote Reset / Options / Save & Exit, so Vote Reset
+    is the 2nd row of the evenly-spaced, similar-width button stack. Returning
+    that 2nd row is position-independent — it works wherever the menu renders,
+    unlike picking the row nearest a fixed target_y (which lands on Options when
+    the menu sits lower in combat zones). Falls back to nearest-target_y only if
+    no clean stack is found."""
     if not rows:
         return None
 
     rows = sorted(rows, key=lambda item: item[0])
-    if len(rows) < 4:
-        return min(rows, key=lambda r: abs(r[0] - target_y))
 
     best_window = None
-    best_score = None
+    best_var = None
     for i in range(len(rows) - 3):
         window = rows[i:i + 4]
         y_vals = [row[0] for row in window]
@@ -596,15 +620,16 @@ def _select_vote_reset_row(rows, target_y):
         avg_gap = sum(gaps) / 3.0
         if avg_gap < 18 or avg_gap > 80:
             continue
+        widths = [row[2] for row in window]
+        if max(widths) / float(max(1, min(widths))) > 1.5:   # menu buttons are uniform width
+            continue
         gap_var = sum((gap - avg_gap) ** 2 for gap in gaps) / 3.0
-        candidate = min(window, key=lambda row: abs(row[0] - target_y))
-        score = gap_var * 2.5 + abs(candidate[0] - target_y) * 1.5
-        if best_score is None or score < best_score:
-            best_score = score
+        if best_var is None or gap_var < best_var:
+            best_var = gap_var
             best_window = window
 
     if best_window is not None:
-        return min(best_window, key=lambda row: abs(row[0] - target_y))
+        return best_window[1]  # Resume[0] / >Vote Reset[1]< / Options[2] / Save & Exit[3]
 
     return min(rows, key=lambda r: abs(r[0] - target_y))
 
@@ -615,15 +640,24 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     vote_x = VOTE_RESET_FIXED_CLICK_X_PX
     vote_y = VOTE_RESET_FIXED_CLICK_Y_PX
 
-    target_y = vote_y
-    if rows:
-        selected = _select_vote_reset_row(rows, target_y)
-        selected_y = selected[0] if selected is not None else target_y
-        print(f"[RST] vote reset detector row y={selected_y} -> fixed click y={vote_y} (target={target_y}, {len(rows)} rows)")
+    # Primary: click the DETECTED Vote Reset row (2nd of the button stack), which
+    # tracks the menu wherever it renders. Fallback: the calibrated fixed Y, then
+    # a small downward sweep.
+    candidate_ys = []
+    selected = _select_vote_reset_row(rows, vote_y) if rows else None
+    if selected is not None:
+        candidate_ys.append(int(selected[0]))
+        print(f"[RST] vote reset = stack 2nd row y={int(selected[0])} ({len(rows)} rows)")
     else:
-        print(f"[RST] vote reset fallback y={vote_y} (no rows detected)")
-    for i in range(attempts):
-        y_i = vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC)
+        print(f"[RST] vote reset fallback fixed y={vote_y} ({len(rows)} rows)")
+    for i in range(max(1, attempts)):
+        candidate_ys.append(vote_y + int(i * SCREEN_H * VOTE_RESET_CLICK_Y_SWEEP_FRAC))
+
+    seen = set()
+    for y_i in candidate_ys:
+        if y_i in seen:
+            continue
+        seen.add(y_i)
         left_click_at(vote_x, y_i, hold_time=0.08)
         if not sleep_interruptible(0.12):
             return False
@@ -633,6 +667,9 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
             tap_key('esc', hold_time=0.12)
             if not sleep_interruptible(0.55):
                 return False
+            continue  # wrong button — try the next candidate
+        if not is_pause_menu_visible(post_frame):
+            return True  # menu closed -> Vote Reset took effect
     return True
 
 
