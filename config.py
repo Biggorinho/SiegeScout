@@ -234,13 +234,6 @@ ITEM_STAR_TELEPORT_CYAN_MAX = 0.25  # patch cyan fraction above this = teleport
 # picks it up; wait this long (no other input) for that to finish.
 ITEM_PICKUP_WAIT_SECONDS = 3.0
 
-# "F Mining" prompt: when the character stands next to an ore, a dark "F" keycap
-# + white "MINING" text appears just above it. Detected as a wide horizontal
-# white-text bar in the central-upper area (width/aspect are frame-relative, so
-# resolution-independent). Confirms the bot is positioned to mine before pressing F.
-MINING_PROMPT_MIN_WIDTH_FRAC = 0.09
-MINING_PROMPT_MIN_ASPECT     = 4.0
-
 # Minimap ore pickaxes are orange/gold. The old detector matched ANY saturated
 # colour and leaned on shape alone, so it tagged red enemy dots, the orange
 # companion duck, and even item stars as "ore". Restricting to the orange hue
