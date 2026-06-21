@@ -637,6 +637,30 @@ def _select_vote_reset_row(rows, target_y):
     return None  # no clean stack -> don't guess
 
 
+_MENU_DUMP_MAX = 8
+_menu_dump_count = 0
+
+
+def _dump_under_detected_menu(frame, n_rows):
+    """Save the pause-menu frame when fewer than 4 buttons were detected, so the
+    2-row read can be diagnosed. Capped per session; written to a subdir so the
+    debug recorder's *.png rotation doesn't delete it."""
+    global _menu_dump_count
+    if _menu_dump_count >= _MENU_DUMP_MAX:
+        return
+    try:
+        import os
+        import time as _time
+        d = os.path.join("debug", "menu_dumps")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, f"pausemenu_{n_rows}rows_{int(_time.time())}.png")
+        if cv2.imwrite(path, frame):
+            _menu_dump_count += 1
+            print(f"[RST] saved under-detected menu ({n_rows} rows) -> {path}")
+    except Exception:
+        pass
+
+
 def _click_vote_reset_menu_button(sct, full_mon, attempts):
     frame  = grab_frame_bgr(sct, full_mon)
     rows   = _find_pause_menu_button_rows(frame)
@@ -644,8 +668,9 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     vote_y = VOTE_RESET_FIXED_CLICK_Y_PX
 
     # Click the confidently-detected Vote Reset row (2nd of the 4-button stack);
-    # otherwise the calibrated fixed Y. NEVER sweep downward and NEVER click the
-    # bottom button — Save & Exit lives there and closes the game.
+    # otherwise the calibrated fixed Y — which is the known Vote Reset position, so
+    # it is safe (never Save & Exit, the bottom button). Save & Exit can only be
+    # reached by a guessed row, which _select_vote_reset_row no longer returns.
     selected = _select_vote_reset_row(rows, vote_y) if rows else None
     if selected is not None:
         click_y = int(selected[0])
@@ -653,17 +678,7 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     else:
         click_y = vote_y
         print(f"[RST] vote reset fallback fixed y={vote_y} ({len(rows)} rows)")
-
-    # Hard safety: refuse to click the bottom-most detected button (Save & Exit).
-    if rows and len(rows) >= 2:
-        bottom_y = max(r[0] for r in rows)
-        guard = max(12, int(SCREEN_H * 0.02))
-        if click_y >= bottom_y - guard and click_y != vote_y:
-            print("[RST] guard: target near bottom button (Save & Exit) -> fixed y")
-            click_y = vote_y
-        if click_y >= bottom_y - guard:
-            print("[RST] no safe Vote Reset target -> abort click (won't risk Save & Exit)")
-            return False
+        _dump_under_detected_menu(frame, len(rows))
 
     left_click_at(vote_x, click_y, hold_time=0.08)
     if not sleep_interruptible(0.12):
