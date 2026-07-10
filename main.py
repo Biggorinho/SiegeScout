@@ -73,6 +73,10 @@ from config import (
     DEBUG_MAX_FILES,
     DEBUG_EVENT_RATE_LIMIT_SECONDS,
     DEBUG_MOSAIC_PANEL_HEIGHT_PX,
+    ENABLE_FRAME_CAPTURE,
+    CAPTURE_DIR,
+    CAPTURE_INTERVAL_SECONDS,
+    CAPTURE_MAX_PAIRS,
     ENEMY_DOT_CONFIRM_THRESHOLD,
     ENEMY_DOT_MATCH_RADIUS_PX,
     ITEM_DOT_CONFIRM_THRESHOLD,
@@ -122,7 +126,7 @@ from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map,
 )
-from debug_utils import DebugRecorder
+from debug_utils import DebugRecorder, FrameCapture
 
 
 def run(
@@ -221,6 +225,12 @@ def run(
         max_files=DEBUG_MAX_FILES,
         event_rate_limit_seconds=DEBUG_EVENT_RATE_LIMIT_SECONDS,
         panel_height=DEBUG_MOSAIC_PANEL_HEIGHT_PX,
+    )
+    frame_capture                = FrameCapture(
+        enabled=ENABLE_FRAME_CAPTURE,
+        base_dir=CAPTURE_DIR,
+        interval_seconds=CAPTURE_INTERVAL_SECONDS,
+        max_pairs=CAPTURE_MAX_PAIRS,
     )
     last_periodic_debug_t        = 0.0
     counters                     = DetectionCounters(zone_started_at=time.time())
@@ -1071,6 +1081,9 @@ def run(
                     hp_percent=hp, counters_snapshot=counters.snapshot(),
                 )
                 last_periodic_debug_t = now_loop
+
+            # Raw pair capture for the offline eval harness (no-op unless enabled).
+            frame_capture.maybe_save(now_loop, frame, minimap)
 
             # ── enemy triggers ATTACK state ───────────────────────────────────
             if state != State.FLEE and confirmed_enemy_now and nearest:
