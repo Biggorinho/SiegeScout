@@ -122,8 +122,8 @@ def evaluate_backend(backend, captures_root: str) -> dict:
         MINIMAP_CLASSES, SCREEN_CLASSES, discover_pairs, load_labels,
     )
 
-    counts = {cls: {"tp": 0, "fp": 0, "fn": 0}
-              for cls in set(MINIMAP_CLASSES) | set(SCREEN_CLASSES)}
+    counts = {f"{cls}@minimap": {"tp": 0, "fp": 0, "fn": 0} for cls in MINIMAP_CLASSES}
+    counts.update({f"{cls}@screen": {"tp": 0, "fp": 0, "fn": 0} for cls in SCREEN_CLASSES})
     terrain_totals = {mode: [] for mode in TERRAIN_MODES}
     pairs_scored = 0
 
@@ -149,9 +149,9 @@ def evaluate_backend(backend, captures_root: str) -> dict:
                 if not truth and not pred:
                     continue
                 tp, fp, fn = match_points(pred, truth, max_dist=6.0)
-                counts[cls]["tp"] += tp
-                counts[cls]["fp"] += fp
-                counts[cls]["fn"] += fn
+                counts[f"{cls}@minimap"]["tp"] += tp
+                counts[f"{cls}@minimap"]["fp"] += fp
+                counts[f"{cls}@minimap"]["fn"] += fn
 
             frame_bgr = cv2.imread(pair["frame"]) if pair["frame"] else None
             if frame_bgr is not None and labels.screen_boxes:
@@ -163,9 +163,9 @@ def evaluate_backend(backend, captures_root: str) -> dict:
                     if not truth and not pred:
                         continue
                     tp, fp, fn = match_boxes(pred, truth, min_iou=0.4)
-                    counts[cls]["tp"] += tp
-                    counts[cls]["fp"] += fp
-                    counts[cls]["fn"] += fn
+                    counts[f"{cls}@screen"]["tp"] += tp
+                    counts[f"{cls}@screen"]["fp"] += fp
+                    counts[f"{cls}@screen"]["fn"] += fn
 
             if any(labels.terrain_strokes.get(m) for m in TERRAIN_MODES):
                 mask = backend.terrain_mask(minimap_bgr)
@@ -189,12 +189,12 @@ def evaluate_backend(backend, captures_root: str) -> dict:
 def format_report(backend_name: str, report: dict) -> str:
     lines = [
         f"backend: {backend_name}   pairs scored: {report['pairs_scored']}",
-        f"{'class':<12} {'P':>6} {'R':>6} {'F1':>6} {'tp':>5} {'fp':>5} {'fn':>5}",
+        f"{'class':<18} {'P':>6} {'R':>6} {'F1':>6} {'tp':>5} {'fp':>5} {'fn':>5}",
     ]
     for cls in sorted(report["classes"]):
         c = report["classes"][cls]
         lines.append(
-            f"{cls:<12} {c['precision']:>6.2f} {c['recall']:>6.2f} "
+            f"{cls:<18} {c['precision']:>6.2f} {c['recall']:>6.2f} "
             f"{c['f1']:>6.2f} {c['tp']:>5} {c['fp']:>5} {c['fn']:>5}"
         )
     for mode, score in report["terrain"].items():

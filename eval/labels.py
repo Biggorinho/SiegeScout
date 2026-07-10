@@ -39,6 +39,9 @@ def save_labels(path: str, labels: FrameLabels) -> None:
 def load_labels(path: str) -> FrameLabels:
     with open(path, "r", encoding="utf-8") as fh:
         raw = json.load(fh)
+    for mode in raw.get("terrain_strokes", {}):
+        if mode not in TERRAIN_MODES:
+            raise ValueError(f"unknown terrain stroke mode: {mode!r} in {path}")
     labels = FrameLabels(
         frame=raw.get("frame", ""),
         minimap=raw.get("minimap", ""),

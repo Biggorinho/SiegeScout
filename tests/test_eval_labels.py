@@ -48,6 +48,15 @@ def test_load_rejects_unknown_box_class(tmp_path):
         load_labels(path)
 
 
+def test_load_rejects_unknown_terrain_stroke_mode(tmp_path):
+    labels = FrameLabels()
+    labels.terrain_strokes["wrongly_purple"] = [{"x": 1, "y": 2, "r": 3}]
+    path = str(tmp_path / "labels_bad.json")
+    save_labels(path, labels)
+    with pytest.raises(ValueError, match="wrongly_purple"):
+        load_labels(path)
+
+
 def test_class_constants():
     assert MINIMAP_CLASSES == ("enemy", "item", "ore", "portal", "player")
     assert SCREEN_CLASSES == ("enemy", "healthbar", "teleport")

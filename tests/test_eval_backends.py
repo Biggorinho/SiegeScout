@@ -79,10 +79,11 @@ def test_evaluate_backend_aggregates(tmp_path):
     }
     _write_session(str(tmp_path), "1", minimap, labels)
     report = evaluate_backend(FakeBackend(), str(tmp_path))
-    enemy = report["classes"]["enemy"]
+    enemy = report["classes"]["enemy@minimap"]
     assert (enemy["tp"], enemy["fp"], enemy["fn"]) == (1, 1, 1)
     assert enemy["precision"] == pytest.approx(0.5)
     assert enemy["recall"] == pytest.approx(0.5)
+    assert "enemy@screen" not in report["classes"]
     assert report["terrain"]["wrongly_blocked"] == pytest.approx(1.0)
     assert report["terrain"]["wrongly_open"] is None
     assert report["pairs_scored"] == 1

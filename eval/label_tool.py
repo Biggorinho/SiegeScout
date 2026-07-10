@@ -27,7 +27,7 @@ import cv2
 import numpy as np
 
 from eval.labels import (
-    MINIMAP_CLASSES, SCREEN_CLASSES, TERRAIN_MODES,
+    MINIMAP_CLASSES, SCREEN_CLASSES,
     FrameLabels, discover_pairs, load_labels, save_labels,
 )
 
