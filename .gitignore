@@ -28,3 +28,5 @@ debug/
 
 # Secrets (keep out of source control)
 roboflow_key.txt
+
+eval/captures/**/*.png

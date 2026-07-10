@@ -282,3 +282,64 @@ class DebugRecorder:
             cv2.putText(img, text, (4, y), cv2.FONT_HERSHEY_PLAIN, 1.0,
                         (0, 220, 255), 1)
         return img
+
+
+class FrameCapture:
+    """Saves raw, unannotated frame + minimap pairs for the offline eval harness.
+
+    Unlike DebugRecorder mosaics, these images carry no overlays so they can
+    be labeled and scored (see eval/). Capped by stopping at max_pairs rather
+    than rotating: rotation would delete early-session zones and destroy
+    dataset diversity. Fails soft on disk errors, like DebugRecorder.
+    """
+
+    def __init__(
+        self,
+        enabled: bool,
+        base_dir: str,
+        interval_seconds: float,
+        max_pairs: int,
+    ) -> None:
+        self._enabled = bool(enabled)
+        self._base_dir = str(base_dir)
+        self._interval = float(interval_seconds)
+        self._max_pairs = int(max_pairs)
+        self._session_dir: str | None = None
+        self._last_save_at: float = -1e9
+        self._saved_pairs = 0
+        self._disabled_due_to_error = False
+        self._cap_logged = False
+
+    def maybe_save(self, now: float, frame_bgr, minimap_bgr) -> str | None:
+        """Save a frame+minimap pair if the interval elapsed. Returns frame path."""
+        if not self._enabled or self._disabled_due_to_error:
+            return None
+        if self._saved_pairs >= self._max_pairs:
+            if not self._cap_logged:
+                print(f"[CAPTURE] reached {self._max_pairs} pairs — capture stopped")
+                self._cap_logged = True
+            return None
+        if (now - self._last_save_at) < self._interval:
+            return None
+        if frame_bgr is None or minimap_bgr is None:
+            return None
+        if getattr(frame_bgr, "size", 0) == 0 or getattr(minimap_bgr, "size", 0) == 0:
+            return None
+        try:
+            if self._session_dir is None:
+                session = time.strftime("session_%Y%m%d-%H%M%S")
+                self._session_dir = os.path.join(self._base_dir, session)
+                os.makedirs(self._session_dir, exist_ok=True)
+            stamp = int(now * 1000)
+            frame_path = os.path.join(self._session_dir, f"frame_{stamp}.png")
+            minimap_path = os.path.join(self._session_dir, f"minimap_{stamp}.png")
+            for path, img in ((frame_path, frame_bgr), (minimap_path, minimap_bgr)):
+                if not cv2.imwrite(path, img):
+                    raise OSError(f"cv2.imwrite returned False for {path}")
+        except OSError as exc:
+            self._disabled_due_to_error = True
+            print(f"[CAPTURE] disk error: {exc} — capture disabled")
+            return None
+        self._last_save_at = now
+        self._saved_pairs += 1
+        return frame_path

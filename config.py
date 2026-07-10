@@ -281,6 +281,15 @@ DEBUG_MAX_FILES                     = 500
 DEBUG_EVENT_RATE_LIMIT_SECONDS      = 1.5
 DEBUG_MOSAIC_PANEL_HEIGHT_PX        = 360
 
+# ── Raw frame capture for the offline eval harness (dev tooling) ─────────────
+# Saves unannotated frame+minimap pairs during runs so they can be labeled
+# and scored (see eval/). Capped by stopping (not rotating) to preserve
+# early-session zone diversity.
+ENABLE_FRAME_CAPTURE                = False
+CAPTURE_DIR                         = os.path.join("eval", "captures")
+CAPTURE_INTERVAL_SECONDS            = 2.0
+CAPTURE_MAX_PAIRS                   = 400
+
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)
 ITEM_DOT_CONFIRM_THRESHOLD          = 2
