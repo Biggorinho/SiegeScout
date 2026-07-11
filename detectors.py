@@ -806,6 +806,13 @@ def find_ore_nodes_on_screen(frame_bgr):
             continue
         cx = int(M["m10"] / M["m00"]) + x0
         cy = int(M["m01"] / M["m00"]) + y0
+        # HUD carve-outs: buff icons (top-left) and the skill bar
+        # (bottom-left) render saturated pickaxe-like glyphs that pass the
+        # shape gate on every frame.
+        if cx < w * 0.30 and cy > h * 0.80:
+            continue
+        if cx < w * 0.17 and cy < h * 0.14:
+            continue
         score = float(stats["area"]) * (1.0 + stats["circularity"])
         hits.append((cx, cy, "pickaxe", score))
 

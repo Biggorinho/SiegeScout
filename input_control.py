@@ -56,6 +56,16 @@ def move_cursor_to(x, y):
     ctypes.windll.user32.SetCursorPos(int(x), int(y))
 
 
+def mouse_scroll(notches):
+    """Scroll the mouse wheel; positive = up. The world map pans left with
+    wheel-up, and the calibrated node coordinates assume the leftmost
+    position, so callers scroll up hard to normalize before scanning."""
+    step = 120 if notches > 0 else -120
+    for _ in range(abs(int(notches))):
+        ctypes.windll.user32.mouse_event(0x0800, 0, 0, step, 0)
+        time.sleep(0.03)
+
+
 def left_click_at(x, y, hold_time=0.05, settle_time=0.0):
     """Click at (x, y). settle_time > 0 waits between the cursor move and the
     press so UI buttons register the hover first — menus can drop a click whose

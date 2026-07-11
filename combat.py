@@ -31,7 +31,7 @@ from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
     tap_key, sleep_interruptible, left_click_at,
-    release_all_inputs, wasd_move, move_cursor_to,
+    release_all_inputs, wasd_move, move_cursor_to, mouse_scroll,
 )
 
 
@@ -883,7 +883,14 @@ def _reopen_world_map_for_recenter(sct, full_mon):
     if not map_visible:
         print("[SAT] recenter failed: world map not visible")
         return None
-    return frame
+    # The map pans horizontally with the mouse wheel and the scroll position
+    # survives close/reopen — the calibrated node coordinates assume the
+    # leftmost position. Hover the map and scroll hard left to normalize.
+    move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
+    mouse_scroll(12)
+    if not sleep_interruptible(0.35):
+        return None
+    return grab_frame_bgr(sct, full_mon)
 
 
 def run_vote_reset_sequence(sct, full_mon, target_zone=None):

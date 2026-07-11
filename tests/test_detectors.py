@@ -188,6 +188,19 @@ def test_get_hp_percent_reads_bright_bar():
     assert hp is not None and 0.45 <= hp <= 0.55
 
 
+def test_find_ore_nodes_excludes_hud_regions():
+    """Buff icons (top-left) and the skill bar (bottom-left) render saturated
+    pickaxe-like glyphs that scored as 'ore' on every frame of the 2026-07-11
+    tundra run, feeding the phantom mining click spam."""
+    from detectors import find_ore_nodes_on_screen
+    nodes = find_ore_nodes_on_screen(_fixture("tundra_no_ore.jpg"))
+    w, h = 1920, 1080
+    hud = [d for d in nodes
+           if (d[0] < w * 0.30 and d[1] > h * 0.80)
+           or (d[0] < w * 0.17 and d[1] < h * 0.14)]
+    assert hud == [], f"HUD glyphs detected as ore: {hud}"
+
+
 def test_get_hp_percent_dimmed_bar_returns_none():
     """Zone-transition fades dim the whole UI: the bar is drawn but its red
     falls below the strict mask, which used to read 0.0 and trigger phantom

@@ -319,6 +319,8 @@ def run(
     last_item_nudge_log_t        = 0.0
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
+    last_minimap_ore_t           = -1e9
+    world_map_frames             = 0
     mining_active_until          = 0.0
     mining_target_screen         = None
     last_loot_items_scan_t       = 0.0
@@ -786,6 +788,24 @@ def run(
                         _do_zone_reset()
                     continue
 
+            # ── stray world map net ───────────────────────────────────────────
+            # A mis-scrolled/failed zone pick can leave the world map open in
+            # gameplay; the HP bar is then unreadable, so the bot fled in place
+            # for 50s (the menu net above is skipped when HP reads critical —
+            # which the open map itself causes). Independent net, ESC it shut.
+            if not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until:
+                if is_world_map_visible(frame):
+                    world_map_frames += 1
+                else:
+                    world_map_frames = 0
+                if world_map_frames >= 2 and screen_motion.is_static():
+                    print("[MENU] world map open during gameplay — ESC")
+                    auto_esc_ignore_until = time.time() + 1.0
+                    tap_key('esc', hold_time=0.12)
+                    menu_escape_cooldown_until = now_loop + 0.8
+                    world_map_frames = 0
+                    continue
+
             # ── capture minimap ───────────────────────────────────────────────
             minimap_region = get_minimap_region(minimap_mode)
             minimap        = cv2.cvtColor(np.array(sct.grab(minimap_region)), cv2.COLOR_BGRA2BGR)
@@ -1201,6 +1221,8 @@ def run(
                     if not qte_active:
                         raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
                         raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        if raw_ore_dots:
+                            last_minimap_ore_t = now_loop
                         if (raw_item_dots or raw_ore_dots) and (now_loop - last_resource_log_t) >= 1.0:
                             print(f"[LOOT] minimap: {len(raw_item_dots)} item(s) {len(raw_ore_dots)} ore on map")
                             last_resource_log_t = now_loop
@@ -1327,7 +1349,15 @@ def run(
                         sleep_interruptible(0.03)
                         continue
 
-                    mining_should_scan = (
+                    # Gate the loose on-screen scan on recent MINIMAP ore
+                    # evidence: the screen detector matches any saturated
+                    # blob (snow on pines scored 30-45 'ores' per tundra
+                    # frame) while the minimap pickaxe detector is precise.
+                    # No minimap ore -> no screen scanning, no phantom clicks.
+                    minimap_ore_recent = (now_loop - last_minimap_ore_t) <= 8.0
+                    if not minimap_ore_recent:
+                        mining_target_screen = None
+                    mining_should_scan = minimap_ore_recent and (
                         (now_loop - last_mining_scan_t) >= MINING_SCAN_INTERVAL_SECONDS
                         or mining_target_screen is None
                     )
