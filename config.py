@@ -365,7 +365,10 @@ _SATANIC_FIXED_NODES_REF = {
     # Reference coordinates calibrated on a 1920×1080 world map screenshot.
     "Arctic Tundra": (306, 217),
     "Chilling Lake": (196, 267),
-    "Corrupted Cave": (1731, 561),
+    # Recalibrated 2026-07-11 from a live rotation-failure frame (old value
+    # pointed at empty map): measured node minus the +25px scroll the offset
+    # voting corrects on every open. Same for Old Mining Village/Misty Swamp.
+    "Corrupted Cave": (565, 843),
     "Corrupted Oasis": (820, 219),
     "Crystal Village": (334, 306),
     "Deep Space": (1392, 253),
@@ -375,10 +378,10 @@ _SATANIC_FIXED_NODES_REF = {
     "Fuji Coast": (1117, 704),
     "Highland Graveyard": (1062, 403),
     "King's Garden": (432, 412),
-    "Misty Swamp": (1442, 535),
+    "Misty Swamp": (1025, 811),
     "MosArathim Desert": (684, 464),
     "Mt. Fuji": (843, 789),
-    "Old Mining Village": (1459, 527),
+    "Old Mining Village": (263, 850),
     "Outskirts of Inoya": (370, 669),
     "Parallel Dimension": (1300, 535),
     "Prison Dungeon": (1011, 270),

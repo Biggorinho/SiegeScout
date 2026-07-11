@@ -381,7 +381,10 @@ def _find_satanic_node(frame_bgr):
 
     h, w   = frame_bgr.shape[:2]
     x0, x1 = int(w * 0.05), int(w * 0.95)
-    y0, y1 = int(h * 0.10), int(h * 0.82)
+    # Bottom row of zone nodes sits at ~82-85% screen height (Corrupted Cave
+    # y=868/1080); the old 0.82 cut them out. 0.90 keeps the F/G hint bar
+    # (~96%) excluded.
+    y0, y1 = int(h * 0.10), int(h * 0.90)
     roi    = frame_bgr[y0:y1, x0:x1]
     if roi.size == 0:
         return None
