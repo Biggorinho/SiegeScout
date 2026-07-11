@@ -462,6 +462,14 @@ def get_hp_percent(frame_bgr):
     mask = cv2.bitwise_or(r1, r2)
     cols = np.where(mask.any(axis=0))[0]
     if len(cols) == 0:
+        # Zone-transition fades dim the whole UI: the bar is drawn but its
+        # red drops below the strict mask. If a looser mask still sees the
+        # bar shape, the reading is unreliable — report unreadable rather
+        # than 0.0 (which used to fire phantom 'HP 0% -> FLEE').
+        l1 = cv2.inRange(hsv, np.array([0,   25, 25]), np.array([12,  255, 255]))
+        l2 = cv2.inRange(hsv, np.array([168, 25, 25]), np.array([180, 255, 255]))
+        if np.count_nonzero(cv2.bitwise_or(l1, l2)) > 0:
+            return None
         return 0.0
     return float(cols[-1] + 1) / HP_BAR["w"]
 

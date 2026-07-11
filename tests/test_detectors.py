@@ -173,6 +173,29 @@ def test_safe_zone_banner_absent_on_other_screens():
     assert is_safe_zone_banner_visible(_fixture("map_selection.png")) is False
 
 
+def _hp_frame(fill_color, fill_frac=1.0):
+    """1920x1080 frame with the HP bar region painted fill_frac wide."""
+    from config import HP_BAR
+    frame = np.full((1080, 1920, 3), 30, dtype=np.uint8)
+    y, x, h, w = HP_BAR["y"], HP_BAR["x"], HP_BAR["h"], HP_BAR["w"]
+    frame[y:y + h, x:x + int(w * fill_frac)] = fill_color
+    return frame
+
+
+def test_get_hp_percent_reads_bright_bar():
+    from detectors import get_hp_percent
+    hp = get_hp_percent(_hp_frame((0, 0, 200), fill_frac=0.5))
+    assert hp is not None and 0.45 <= hp <= 0.55
+
+
+def test_get_hp_percent_dimmed_bar_returns_none():
+    """Zone-transition fades dim the whole UI: the bar is drawn but its red
+    falls below the strict mask, which used to read 0.0 and trigger phantom
+    'HP 0% -> FLEE'. A dimmed-but-present bar must read as unreadable."""
+    from detectors import get_hp_percent
+    assert get_hp_percent(_hp_frame((0, 0, 45))) is None
+
+
 def test_classify_ore_dots_finds_real_ore():
     """Real orange ore icons (~64,131 and ~67,111 in the fixture) are detected."""
     ore = classify_ore_dots(_load_dark_fixture())

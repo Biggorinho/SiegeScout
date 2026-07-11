@@ -742,7 +742,12 @@ def run(
                     menu_escape_cooldown_until = now_loop + 0.8
                     pause_menu_frames = 0
                     continue
-                if inventory_panel_frames >= MENU_CONFIRM_FRAMES_LOCAL:
+                # Static gate like the other menu branches: the gold-legend
+                # check false-positives on golden zones (Mos'Arathim sand fills
+                # the bottom-right band), and its stray ESC opened real menus
+                # mid-combat — kicking off the dim -> HP-misread -> phantom
+                # death cascade. A real panel means the bot stopped: static.
+                if inventory_panel_frames >= MENU_CONFIRM_FRAMES_LOCAL and menu_screen_static:
                     print("[MENU] inventory/interface panel detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
