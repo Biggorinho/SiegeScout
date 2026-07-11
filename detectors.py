@@ -522,6 +522,13 @@ def grab_frame_bgr(sct, full_mon):
 
 
 def is_world_map_visible(frame_bgr):
+    """Detect the fullscreen zone-selection map (purple parchment + blue nodes).
+
+    The parchment is RICHLY saturated purple (S median ~124 on the reference
+    fixture). Hell 'Parallel Dimension' zones tint ordinary gameplay with a
+    washed-out purple haze (S median ~67-72) that covers 60%+ of the frame,
+    so a ratio gate alone false-positives on every frame there — the median
+    saturation of the purple-matched pixels is the load-bearing separator."""
     if frame_bgr is None or frame_bgr.size == 0:
         return False
     hsv        = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
@@ -529,7 +536,10 @@ def is_world_map_visible(frame_bgr):
     purple_bg  = cv2.inRange(hsv, np.array([125, 35,  35]), np.array([170, 255, 220]))
     blue_ratio   = float(np.count_nonzero(blue_nodes)) / blue_nodes.size
     purple_ratio = float(np.count_nonzero(purple_bg))  / purple_bg.size
-    return blue_ratio > 0.0008 and purple_ratio > 0.10
+    if not (blue_ratio > 0.0008 and purple_ratio > 0.35):
+        return False
+    purple_sat = hsv[:, :, 1][purple_bg > 0]
+    return float(np.median(purple_sat)) >= 95.0
 
 
 def is_pause_menu_visible(frame_bgr):

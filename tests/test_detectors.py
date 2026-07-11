@@ -126,6 +126,32 @@ def test_is_world_map_visible_false_in_safe_zone():
     assert is_world_map_visible(_fixture("safe_zone.png")) is False
 
 
+def test_is_world_map_visible_false_in_purple_zone_combat():
+    """Hell 'Parallel Dimension' zones tint ordinary gameplay purple (ratio 0.6+),
+    which the pre-fix detector mistook for the map parchment on every frame,
+    derailing the whole vote-reset flow (captured 2026-07-11 failure run)."""
+    assert is_world_map_visible(_fixture("purple_zone_combat.png")) is False
+
+
+def test_is_world_map_visible_false_in_town_with_pause_menu():
+    """Post-reset town + open pause menu (dim purple palette) is not the map.
+    The pre-fix false positive here made pick_zone click a phantom map while
+    the pause menu had focus, so every vote reset 'failed' after succeeding."""
+    assert is_world_map_visible(_fixture("purple_town_pause_menu.png")) is False
+
+
+def test_is_world_map_visible_false_on_pause_menu_in_combat():
+    """Pause menu over a combat scene (purple ratio 0.41) is not the map."""
+    assert is_world_map_visible(_fixture("pause_menu_combat.png")) is False
+
+
+def test_is_pause_menu_visible_false_on_map_selection():
+    """The world map's red node glow must not read as pause-menu button bars —
+    guards the menu-before-map check order in the vote-reset flow."""
+    from detectors import is_pause_menu_visible
+    assert is_pause_menu_visible(_fixture("map_selection.png")) is False
+
+
 def test_classify_ore_dots_finds_real_ore():
     """Real orange ore icons (~64,131 and ~67,111 in the fixture) are detected."""
     ore = classify_ore_dots(_load_dark_fixture())
