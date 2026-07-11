@@ -44,9 +44,10 @@ def wait_for_world_map(sct, full_mon, retry_interact_key=None):
     while time.time() < deadline:
         frame      = grab_frame_bgr(sct, full_mon)
         last_frame = frame
-        if is_world_map_visible(frame):
-            return True, frame
-
+        # Menu check must come FIRST: the pause menu renders over the map
+        # without hiding it, so both detectors can be true at once — and in
+        # that state the modal menu consumes all clicks, so reporting the map
+        # as ready would make the caller click a map that has no focus.
         if is_pause_menu_visible(frame):
             tap_key('esc', hold_time=0.08)
             if not sleep_interruptible(0.22):
@@ -56,6 +57,9 @@ def wait_for_world_map(sct, full_mon, retry_interact_key=None):
                 if not sleep_interruptible(0.22):
                     return False, last_frame
             continue
+
+        if is_world_map_visible(frame):
+            return True, frame
 
         now = time.time()
         if retry_interact_key and now >= next_retry_t:
@@ -809,13 +813,18 @@ def _reopen_world_map_for_recenter(sct, full_mon):
     """Close and reopen world map once to recenter map position."""
     print("[SAT] recenter: closing and reopening world map")
     current = grab_frame_bgr(sct, full_mon)
+    # Clear a pause menu FIRST: it can sit on top of the open map (both
+    # detectors true), and ESC always closes the top-most UI — the old
+    # map-first branch spent its only ESC on the menu, then pressed the
+    # interact key ('f' = Choose) on a map that was never closed/recentered.
+    if is_pause_menu_visible(current):
+        tap_key('esc', hold_time=0.08)
+        if not sleep_interruptible(0.32):
+            return None
+        current = grab_frame_bgr(sct, full_mon)
     if is_world_map_visible(current):
         tap_key('esc', hold_time=0.08)
         if not sleep_interruptible(0.45):
-            return None
-    elif is_pause_menu_visible(current):
-        tap_key('esc', hold_time=0.08)
-        if not sleep_interruptible(0.32):
             return None
     else:
         if not sleep_interruptible(0.15):
