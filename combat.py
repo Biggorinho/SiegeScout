@@ -837,6 +837,9 @@ def _ensure_pause_menu_open(sct, full_mon):
         print("[RST] pause menu confirmed (second ESC)")
         return True
 
+    # The force fallback that follows usually succeeds, meaning the menu WAS
+    # open but undetected — dump the frame so the detection gap can be seen.
+    _dump_debug_frame(frame, "pausemenu_confirm_fail")
     print("[RST] could not open pause menu reliably")
     return False
 

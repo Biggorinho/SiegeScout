@@ -815,7 +815,12 @@ def run(
                     attack_key_up()
                     attack_held = False
                 release_all_inputs()
-                if (now_loop - last_death_respawn_t) >= HP_ZERO_RESPAWN_COOLDOWN_SECONDS:
+                # Corroborate before respawn-clicking: a real HP-0 death shows
+                # the death overlay on a frozen scene within the sustain window.
+                # Residual HP misreads (fully dark frame after a failed reset)
+                # otherwise fire respawn clicks and an unwanted zone change.
+                if (now_loop - last_death_respawn_t) >= HP_ZERO_RESPAWN_COOLDOWN_SECONDS \
+                        and is_death_screen(frame) and screen_motion.is_static():
                     print("[DEATH-HP] HP 0% confirmed -> Respawn + Vote Reset")
                     last_death_respawn_t = now_loop
                     attempt_respawn(sct, full_mon)
