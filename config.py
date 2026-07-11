@@ -285,7 +285,7 @@ DEBUG_MOSAIC_PANEL_HEIGHT_PX        = 360
 # Saves unannotated frame+minimap pairs during runs so they can be labeled
 # and scored (see eval/). Capped by stopping (not rotating) to preserve
 # early-session zone diversity.
-ENABLE_FRAME_CAPTURE                = False
+ENABLE_FRAME_CAPTURE                = True
 CAPTURE_DIR                         = os.path.join("eval", "captures")
 CAPTURE_INTERVAL_SECONDS            = 2.0
 CAPTURE_MAX_PAIRS                   = 400
@@ -313,6 +313,9 @@ ZONE_MAX_SECONDS_BEFORE_RESET          = 22.0
 ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS  = 8.0
 VOTE_RESET_COOLDOWN_SECONDS            = 25.0
 VOTE_RESET_FAIL_COOLDOWN_SECONDS       = 8.0
+# Backoff when the game itself refuses resets (Vote Reset button renders its
+# disabled/cooldown skin). Distinct from click failures: no lockout streak.
+VOTE_RESET_UNAVAILABLE_RETRY_SECONDS   = 45.0
 VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT   = 4
 VOTE_RESET_FAIL_LOCKOUT_SECONDS        = 75.0
 VOTE_RESET_ENEMY_GRACE_SECONDS         = 2.0

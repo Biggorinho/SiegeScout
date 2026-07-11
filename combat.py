@@ -671,6 +671,29 @@ def _dump_debug_frame(frame, prefix):
         pass
 
 
+def _vote_reset_row_is_active(frame, click_y):
+    """True when the Vote Reset bar at click_y renders its normal red skin.
+
+    During the game's reset cooldown the bar swaps to a dark disabled skin
+    (red coverage ~0.05 vs ~0.66 active, measured on 2026-07-11 dumps) and
+    the game silently ignores clicks on it — clicking anyway just burns the
+    fail streak into lockouts, so callers skip and back off instead."""
+    if frame is None or frame.size == 0:
+        return True  # can't judge — don't block the click path
+    h, w = frame.shape[:2]
+    half = max(10, int(h * 0.019))
+    y0, y1 = max(0, int(click_y) - half), min(h, int(click_y) + half)
+    x0, x1 = int(w * 0.44), int(w * 0.56)
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0:
+        return True
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    r1 = cv2.inRange(hsv, np.array([0, 45, 38]), np.array([20, 255, 255]))
+    r2 = cv2.inRange(hsv, np.array([160, 45, 38]), np.array([180, 255, 255]))
+    red = cv2.bitwise_or(r1, r2)
+    return (float(np.count_nonzero(red)) / red.size) >= 0.25
+
+
 def _click_vote_reset_menu_button(sct, full_mon, attempts):
     frame  = grab_frame_bgr(sct, full_mon)
     rows   = _find_pause_menu_button_rows(frame)
@@ -690,7 +713,14 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         print(f"[RST] vote reset fallback fixed y={vote_y} ({len(rows)} rows)")
         _dump_debug_frame(frame, f"pausemenu_{len(rows)}rows")
 
-    left_click_at(vote_x, click_y, hold_time=0.08)
+    if not _vote_reset_row_is_active(frame, click_y):
+        print(f"[RST] vote reset button disabled (cooldown skin) at y={click_y} -> unavailable")
+        _dump_debug_frame(frame, "votereset_disabled")
+        return "unavailable"
+
+    # settle_time lets the menu register the hover before the press — a
+    # mouse-down in the same frame as the cursor teleport can be dropped.
+    left_click_at(vote_x, click_y, hold_time=0.08, settle_time=0.15)
     if not sleep_interruptible(0.12):
         return False
     post_frame = grab_frame_bgr(sct, full_mon)
@@ -699,6 +729,16 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         tap_key('esc', hold_time=0.12)
         sleep_interruptible(0.55)
         return False
+    # Verify the menu reacted: a successful vote closes it. If it is still up
+    # with the button still active, the click was lost — retry once.
+    if not sleep_interruptible(0.40):
+        return False
+    post_frame = grab_frame_bgr(sct, full_mon)
+    if is_pause_menu_visible(post_frame) and _vote_reset_row_is_active(post_frame, click_y):
+        print("[RST] vote reset click had no effect -> hover-settle retry")
+        left_click_at(vote_x, click_y, hold_time=0.10, settle_time=0.25)
+        if not sleep_interruptible(0.30):
+            return False
     return True
 
 
@@ -850,7 +890,14 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
 
     sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3)
 
-    if not _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS):
+    clicked = _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
+    if clicked == "unavailable":
+        # In-game reset cooldown — close the menu we opened and report
+        # distinctly so the caller backs off instead of burning fail streaks.
+        tap_key('esc', hold_time=0.10)
+        sleep_interruptible(0.35)
+        return "unavailable"
+    if not clicked:
         return False
 
     tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)

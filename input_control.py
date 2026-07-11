@@ -51,8 +51,13 @@ def right_mouse_click(hold_time=0.05):
     ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)
 
 
-def left_click_at(x, y, hold_time=0.05):
+def left_click_at(x, y, hold_time=0.05, settle_time=0.0):
+    """Click at (x, y). settle_time > 0 waits between the cursor move and the
+    press so UI buttons register the hover first — menus can drop a click whose
+    mouse-down arrives in the same frame as the cursor teleport."""
     ctypes.windll.user32.SetCursorPos(int(x), int(y))
+    if settle_time > 0:
+        sleep_interruptible(settle_time)
     ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
     sleep_interruptible(hold_time)
     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)

@@ -35,6 +35,7 @@ from config import (
     STUCK_VOTE_RESET_CONSECUTIVE, HARD_STUCK_RESET_SECONDS,
     CORNER_ESCAPE_COOLDOWN_SECONDS, CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET,
     VOTE_RESET_COOLDOWN_SECONDS, VOTE_RESET_FAIL_COOLDOWN_SECONDS, VOTE_RESET_ENEMY_GRACE_SECONDS,
+    VOTE_RESET_UNAVAILABLE_RETRY_SECONDS,
     VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT, VOTE_RESET_FAIL_LOCKOUT_SECONDS,
     VOTE_RESET_MIN_HP, NO_ENEMY_RESET_MIN_FRAMES,
     ZONE_MAX_SECONDS_BEFORE_RESET, ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS,
@@ -462,6 +463,13 @@ def run(
             last_vote_reset_t = attempt_t
             auto_esc_ignore_until = attempt_t + 1.0
             ok = _run_vote_reset(target_zone)
+            if ok == "unavailable":
+                # The game refuses resets right now (button in cooldown skin) —
+                # not a click failure, so no fail streak; gate retries instead.
+                vote_reset_fail_streak = 0
+                vote_reset_lockout_until = max(vote_reset_lockout_until, attempt_t + VOTE_RESET_UNAVAILABLE_RETRY_SECONDS)
+                print(f"[RST] vote reset unavailable (in-game cooldown) -> retry in {VOTE_RESET_UNAVAILABLE_RETRY_SECONDS:.0f}s")
+                return False
             if ok:
                 vote_reset_fail_streak = 0
                 vote_reset_lockout_until = 0.0
@@ -595,7 +603,7 @@ def run(
                         tap_key('esc', hold_time=0.10)
                         sleep_interruptible(0.40)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if _run_vote_reset(target_zone):
+                    if _run_vote_reset(target_zone) is True:
                         _do_zone_reset()
                     death_screen_frames = 0
                     continue
@@ -774,7 +782,7 @@ def run(
                     attempt_respawn(sct, full_mon)
                     sleep_interruptible(RESPAWN_TO_RESET_DELAY_SECONDS)
                     auto_esc_ignore_until = time.time() + 1.0
-                    if _run_vote_reset(target_zone):
+                    if _run_vote_reset(target_zone) is True:
                         _do_zone_reset()
                 sleep_interruptible(0.08)
                 continue
