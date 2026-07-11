@@ -71,15 +71,20 @@ def _build_terrain_wall_mask(minimap_bgr):
     hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2GRAY)
 
-    # Two wall categories:
+    # Three wall categories:
     #   1) Mid-grey linework (dim strokes, low S, mid V) — the original heuristic
     #      but narrowed to avoid overlap with cyan fog (S>=80) which must stay
     #      walkable.
     #   2) Bright structures (grave markers, buildings, fences) — high V, low S.
     #      These were missed by the old V<=190 cap.
-    linework_dim    = cv2.inRange(hsv, np.array([0, 0,  25]), np.array([180, 70, 190]))
-    linework_bright = cv2.inRange(hsv, np.array([0, 0, 180]), np.array([180, 70, 255]))
-    linework = cv2.bitwise_or(linework_dim, linework_bright)
+    #   3) Magenta linework — the game's purple-minimap-walls setting renders
+    #      walls at H=150/S=255 (measured 2026-07-11). Purple enemy blobs sit
+    #      at H~130/S~185, safely outside this range. Absent under default
+    #      settings, so the extra mask is a no-op there.
+    linework_dim     = cv2.inRange(hsv, np.array([0, 0,  25]), np.array([180, 70, 190]))
+    linework_bright  = cv2.inRange(hsv, np.array([0, 0, 180]), np.array([180, 70, 255]))
+    linework_magenta = cv2.inRange(hsv, np.array([143, 210, 60]), np.array([162, 255, 255]))
+    linework = cv2.bitwise_or(cv2.bitwise_or(linework_dim, linework_bright), linework_magenta)
     # Lower Canny low-threshold so faint structure edges are picked up too.
     edges    = cv2.Canny(gray, 25, 110)
 
@@ -104,14 +109,22 @@ def _dark_zone_walkable_mask(minimap_bgr, hsv):
     disc = np.zeros((h, w), dtype=np.uint8)
     cv2.circle(disc, (cx, cy), int(min(h, w) * 0.5 * DARK_DISC_RADIUS_FRAC), 255, -1)
 
-    bright_wall = cv2.inRange(hsv, np.array([0, 0, DARK_WALL_MIN_V]), np.array([180, 110, 255]))
-    cyan_ring   = cv2.inRange(hsv, np.array([80, 90, 90]), np.array([105, 255, 255]))
-    wall = cv2.bitwise_or(bright_wall, cyan_ring)
+    bright_wall  = cv2.inRange(hsv, np.array([0, 0, DARK_WALL_MIN_V]), np.array([180, 110, 255]))
+    cyan_ring    = cv2.inRange(hsv, np.array([80, 90, 90]), np.array([105, 255, 255]))
+    # Purple-walls game setting: magenta linework (see _build_terrain_wall_mask).
+    magenta_wall = cv2.inRange(hsv, np.array([143, 210, 60]), np.array([162, 255, 255]))
+    wall = cv2.bitwise_or(cv2.bitwise_or(bright_wall, cyan_ring), magenta_wall)
     wall = cv2.dilate(wall, np.ones((2, 2), dtype=np.uint8), iterations=1)
 
     floor = cv2.bitwise_and(disc, cv2.bitwise_not(wall))
     floor = cv2.morphologyEx(floor, cv2.MORPH_CLOSE, np.ones((5, 5), dtype=np.uint8), iterations=1)
     floor = cv2.morphologyEx(floor, cv2.MORPH_OPEN,  np.ones((2, 2), dtype=np.uint8), iterations=1)
+    # Re-carve magenta walls AFTER the morphology: the gap-closing above is
+    # meant to keep stray bright specks from severing the floor, but it also
+    # re-covers thin wall lines — and the purple-walls setting gives real,
+    # reliable 1-2px walls that must stay blocked.
+    floor = cv2.bitwise_and(floor, cv2.bitwise_not(cv2.dilate(
+        magenta_wall, np.ones((2, 2), dtype=np.uint8), iterations=1)))
     return floor
 
 
@@ -135,6 +148,11 @@ def build_raw_walkable_minimap_mask(minimap_bgr):
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,  np.ones((2, 2), dtype=np.uint8), iterations=1)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), dtype=np.uint8), iterations=1)
     mask = cv2.dilate(mask, np.ones((3, 3), dtype=np.uint8), iterations=1)
+    # Re-carve magenta walls after close/dilate re-covered the thin lines
+    # (purple-walls game setting; see _build_terrain_wall_mask category 3).
+    magenta_wall = cv2.inRange(hsv, np.array([143, 210, 60]), np.array([162, 255, 255]))
+    mask = cv2.bitwise_and(mask, cv2.bitwise_not(cv2.dilate(
+        magenta_wall, np.ones((2, 2), dtype=np.uint8), iterations=1)))
     return mask
 
 

@@ -188,6 +188,25 @@ def test_get_hp_percent_reads_bright_bar():
     assert hp is not None and 0.45 <= hp <= 0.55
 
 
+def test_purple_walls_not_classified_as_purple_enemies():
+    """With the purple-minimap-walls game setting, wall linework renders at
+    H=150/S=255 — inside the old purple-enemy range [128,160], which reported
+    19 phantom purple enemies on this fixture. Real purple enemies are indigo
+    blobs at H~130/S~185; the tightened range keeps them and drops walls."""
+    from detectors import classify_enemy_dots, ENEMY_TIER_PURPLE
+    dots = classify_enemy_dots(_fixture("purple_walls_mm_3.png"))
+    purple = [d for d in dots if d[2] == ENEMY_TIER_PURPLE]
+    assert 1 <= len(purple) <= 8, f"expected real purple blobs only, got {len(purple)}"
+
+
+def test_real_purple_enemies_still_detected():
+    """Regression guard: indigo purple enemies (H~130) from the default-wall
+    setting must survive the hue-range tightening."""
+    from detectors import classify_enemy_dots, ENEMY_TIER_PURPLE
+    dots = classify_enemy_dots(_fixture("purple_enemies_mm.png"))
+    assert any(d[2] == ENEMY_TIER_PURPLE for d in dots)
+
+
 def test_find_ore_nodes_excludes_hud_regions():
     """Buff icons (top-left) and the skill bar (bottom-left) render saturated
     pickaxe-like glyphs that scored as 'ore' on every frame of the 2026-07-11

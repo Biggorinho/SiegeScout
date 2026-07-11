@@ -159,6 +159,25 @@ def test_build_walkable_minimap_mask_returns_same_when_no_terrain_memory():
     assert np.array_equal(raw, fused)
 
 
+def test_purple_wall_setting_blocks_magenta_linework():
+    """User's purple-minimap-walls game setting renders walls at H=150/S=255.
+    Neither the grey-linework mask nor the dark-zone bright-wall mask caught
+    them (both cap saturation), so pathfinding routed through walls. Fixture
+    from the 2026-07-11 screenshots."""
+    import cv2
+    from pathlib import Path
+    p = Path(__file__).resolve().parent / "fixtures" / "purple_walls_mm_3.png"
+    mm = cv2.imread(str(p))
+    assert mm is not None
+    mask = build_walkable_minimap_mask(mm)
+    assert mask is not None
+    hsv = cv2.cvtColor(mm, cv2.COLOR_BGR2HSV)
+    magenta = cv2.inRange(hsv, np.array([143, 210, 60]), np.array([162, 255, 255]))
+    sel = magenta > 0
+    blocked = np.count_nonzero((mask == 0) & sel) / max(1, np.count_nonzero(sel))
+    assert blocked >= 0.6, f"only {blocked:.2f} of magenta wall pixels blocked"
+
+
 def test_connected_walkable_mask_keeps_only_player_component():
     # Two disjoint walkable regions; only the one touching the player center stays.
     h, w = 60, 60

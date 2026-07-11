@@ -121,7 +121,7 @@ def classify_enemy_dots(minimap_bgr):
 
     r1    = cv2.inRange(hsv, np.array([0,   120, 110]), np.array([10,  255, 255]))
     r2    = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
-    p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
+    p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([142, 255, 255]))  # upper 160->142: purple-wall setting renders walls at H=150
     y     = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
     skull = cv2.inRange(hsv, np.array([0, 0, 138]),     np.array([180, 65, 255]))
 
@@ -439,7 +439,7 @@ def build_enemy_color_mask(minimap_bgr):
     hsv = cv2.cvtColor(minimap_bgr, cv2.COLOR_BGR2HSV)
     r1    = cv2.inRange(hsv, np.array([0,   120, 110]), np.array([10,  255, 255]))
     r2    = cv2.inRange(hsv, np.array([170, 120, 110]), np.array([180, 255, 255]))
-    p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([160, 255, 255]))
+    p     = cv2.inRange(hsv, np.array([128,  80,  90]), np.array([142, 255, 255]))  # upper 160->142: purple-wall setting renders walls at H=150
     y     = cv2.inRange(hsv, np.array([10,   90, 100]), np.array([38,  255, 255]))
     skull = cv2.inRange(hsv, np.array([0, 0, 138]),     np.array([180, 65, 255]))
     return cv2.bitwise_or(cv2.bitwise_or(cv2.bitwise_or(r1, r2), cv2.bitwise_or(p, y)), skull)
