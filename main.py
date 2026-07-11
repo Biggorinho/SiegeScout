@@ -315,6 +315,10 @@ def run(
     last_mining_click_t          = 0.0
     last_mining_interact_t       = 0.0
     last_mining_qte_press_t      = 0.0
+    last_mine_adjacent_log_t     = 0.0
+    last_item_nudge_log_t        = 0.0
+    last_mining_seen_log_t       = 0.0
+    last_qte_log_t               = 0.0
     mining_active_until          = 0.0
     mining_target_screen         = None
     last_loot_items_scan_t       = 0.0
@@ -1213,6 +1217,8 @@ def run(
                         )
                         if prev_rt_active is not None and rt_target is None:
                             reason = resource_targeter.last_release_reason
+                            _rt_age = now_loop - prev_rt_active.acquired_at
+                            print(f"[RT] {prev_rt_active.kind} target dropped ({reason}) after {_rt_age:.1f}s")
                             if reason == "disappeared" and (now_loop - prev_rt_active.acquired_at) < 1.0:
                                 counters.resource_target_disappeared_early += 1
                             elif reason == "timeout":
@@ -1229,6 +1235,8 @@ def run(
                                 counters_snapshot=counters.snapshot(),
                             )
                         elif rt_target is not None and prev_rt_active is None:
+                            print(f"[RT] {rt_target.kind} target acquired at {rt_target.pos} "
+                                  f"dist={dot_distance(rt_target.pos, center):.0f}px")
                             debug_recorder.maybe_record(
                                 now=now_loop, event="resource_target_acquired",
                                 frame_bgr=frame, minimap_bgr=minimap, center=center,
@@ -1250,6 +1258,10 @@ def run(
                                 continue
                         elif rt_target is not None and rt_target.kind == "ore":
                             # Mining: stand next to the ore, press F, wait ~0.5s, press F.
+                            if (now_loop - last_mine_adjacent_log_t) >= 1.0:
+                                print(f"[MINE] adjacent to ore dot (dist="
+                                      f"{dot_distance(rt_target.pos, center):.0f}px) -> F,F")
+                                last_mine_adjacent_log_t = now_loop
                             tap_key('f', hold_time=0.04)
                             sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
                             tap_key('f', hold_time=0.04)
@@ -1276,6 +1288,9 @@ def run(
                                 resource_targeter.mark_attempted(now_loop)
                                 continue
                             # No label on-screen yet — nudge toward the dot to bring it in view.
+                            if (now_loop - last_item_nudge_log_t) >= 1.0:
+                                print("[LOOT] close to item dot, no label on screen -> nudging")
+                                last_item_nudge_log_t = now_loop
                             idx, idy = dot_to_screen_delta(rt_target.pos, center)
                             if abs(idx) + abs(idy) > 6:
                                 wasd_move(idx, idy, 0.08)
@@ -1286,6 +1301,9 @@ def run(
                 if _enable_mining and resource_collect_allowed and not confirmed_enemy_now:
                     qte = detect_mining_qte_window(frame)
                     if qte.get("active", False):
+                        if (now_loop - last_qte_log_t) >= 2.0:
+                            print(f"[MINE] QTE active (in_window={qte.get('in_window', False)})")
+                            last_qte_log_t = now_loop
                         mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
                         if not qte.get("in_window", False) \
                                 and (now_loop - last_qte_in_window_press_t) > 1.0:
@@ -1325,6 +1343,10 @@ def run(
                             key=lambda n: (n[0] - px) * (n[0] - px) + (n[1] - py) * (n[1] - py),
                         )
                         mining_active_until = now_loop + MINING_SESSION_MEMORY_SECONDS
+                        if (now_loop - last_mining_seen_log_t) >= 1.0:
+                            print(f"[MINE] {len(ores_on_screen)} ore node(s) on screen, "
+                                  f"nearest at {mining_target_screen[:2]}")
+                            last_mining_seen_log_t = now_loop
 
                     if mining_target_screen is not None and now_loop <= mining_active_until:
                         tx, ty = int(mining_target_screen[0]), int(mining_target_screen[1])
@@ -1333,6 +1355,7 @@ def run(
                         mdist = math.hypot(mdx, mdy)
 
                         if (now_loop - last_mining_click_t) >= MINING_CLICK_INTERVAL_SECONDS:
+                            print(f"[MINE] click ore at ({tx},{ty}) dist={mdist:.0f}px")
                             left_click_at(tx, ty, hold_time=0.05)
                             last_mining_click_t = now_loop
 
