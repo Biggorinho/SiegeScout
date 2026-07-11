@@ -313,9 +313,11 @@ ZONE_MAX_SECONDS_BEFORE_RESET          = 22.0
 ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS  = 8.0
 VOTE_RESET_COOLDOWN_SECONDS            = 25.0
 VOTE_RESET_FAIL_COOLDOWN_SECONDS       = 8.0
-# Backoff when the game itself refuses resets (Vote Reset button renders its
-# disabled/cooldown skin). Distinct from click failures: no lockout streak.
-VOTE_RESET_UNAVAILABLE_RETRY_SECONDS   = 45.0
+# Backoff when the game refuses the reset: the Vote Reset button renders a
+# dark disabled skin while enemies are nearby (normally clears within ~5s).
+# The bot's own detection missed those enemies, so back off briefly and go
+# find them. Distinct from click failures: no lockout streak.
+VOTE_RESET_UNAVAILABLE_RETRY_SECONDS   = 10.0
 VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT   = 4
 VOTE_RESET_FAIL_LOCKOUT_SECONDS        = 75.0
 VOTE_RESET_ENEMY_GRACE_SECONDS         = 2.0

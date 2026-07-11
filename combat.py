@@ -674,10 +674,11 @@ def _dump_debug_frame(frame, prefix):
 def _vote_reset_row_is_active(frame, click_y):
     """True when the Vote Reset bar at click_y renders its normal red skin.
 
-    During the game's reset cooldown the bar swaps to a dark disabled skin
-    (red coverage ~0.05 vs ~0.66 active, measured on 2026-07-11 dumps) and
-    the game silently ignores clicks on it — clicking anyway just burns the
-    fail streak into lockouts, so callers skip and back off instead."""
+    The game disables Vote Reset while enemies are nearby (dark skin, red
+    coverage ~0.05 vs ~0.66 active, measured on 2026-07-11 dumps) and
+    silently ignores clicks on it — clicking anyway just burns the fail
+    streak into lockouts. A disabled bar therefore means our own enemy
+    detection missed something; callers skip and go find it instead."""
     if frame is None or frame.size == 0:
         return True  # can't judge — don't block the click path
     h, w = frame.shape[:2]
@@ -714,7 +715,7 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         _dump_debug_frame(frame, f"pausemenu_{len(rows)}rows")
 
     if not _vote_reset_row_is_active(frame, click_y):
-        print(f"[RST] vote reset button disabled (cooldown skin) at y={click_y} -> unavailable")
+        print(f"[RST] vote reset button disabled (enemies nearby) at y={click_y} -> unavailable")
         _dump_debug_frame(frame, "votereset_disabled")
         return "unavailable"
 

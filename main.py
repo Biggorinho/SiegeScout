@@ -464,11 +464,12 @@ def run(
             auto_esc_ignore_until = attempt_t + 1.0
             ok = _run_vote_reset(target_zone)
             if ok == "unavailable":
-                # The game refuses resets right now (button in cooldown skin) —
-                # not a click failure, so no fail streak; gate retries instead.
+                # Disabled Vote Reset button = the game sees enemies nearby that
+                # our detection missed. Not a click failure (no fail streak);
+                # back off briefly so EXPLORE can go find them, then retry.
                 vote_reset_fail_streak = 0
                 vote_reset_lockout_until = max(vote_reset_lockout_until, attempt_t + VOTE_RESET_UNAVAILABLE_RETRY_SECONDS)
-                print(f"[RST] vote reset unavailable (in-game cooldown) -> retry in {VOTE_RESET_UNAVAILABLE_RETRY_SECONDS:.0f}s")
+                print(f"[RST] vote reset unavailable (enemies nearby) -> retry in {VOTE_RESET_UNAVAILABLE_RETRY_SECONDS:.0f}s")
                 return False
             if ok:
                 vote_reset_fail_streak = 0
