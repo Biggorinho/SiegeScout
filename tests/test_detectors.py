@@ -152,6 +152,27 @@ def test_is_pause_menu_visible_false_on_map_selection():
     assert is_pause_menu_visible(_fixture("map_selection.png")) is False
 
 
+def test_safe_zone_banner_detected_in_village():
+    """Green 'Safe Zone' text by the minimap — shown while standing in a
+    zone's protected entrance, e.g. right after a vote reset teleports the
+    player onto the waypoint (fixture from the 2026-07-11 run)."""
+    from detectors import is_safe_zone_banner_visible
+    assert is_safe_zone_banner_visible(_fixture("safe_zone_banner.png")) is True
+
+
+def test_safe_zone_banner_absent_in_wilderness():
+    """The multiplayer Ping line is also green in the same corner but must
+    stay below the banner gate (~5x separation measured)."""
+    from detectors import is_safe_zone_banner_visible
+    assert is_safe_zone_banner_visible(_fixture("wilderness_ping_only.png")) is False
+
+
+def test_safe_zone_banner_absent_on_other_screens():
+    from detectors import is_safe_zone_banner_visible
+    assert is_safe_zone_banner_visible(_fixture("purple_zone_combat.png")) is False
+    assert is_safe_zone_banner_visible(_fixture("map_selection.png")) is False
+
+
 def test_classify_ore_dots_finds_real_ore():
     """Real orange ore icons (~64,131 and ~67,111 in the fixture) are detected."""
     ore = classify_ore_dots(_load_dark_fixture())

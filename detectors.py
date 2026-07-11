@@ -700,6 +700,25 @@ def is_death_screen(frame_bgr):
     return text_red_pixels >= 140 and btn_pixels >= 260
 
 
+def is_safe_zone_banner_visible(frame_bgr):
+    """Detect the green 'Safe Zone' text left of the minimap.
+
+    Shown while standing in a zone's protected entrance area — notably right
+    after a vote reset teleports the player onto the waypoint. The green
+    multiplayer Ping line in the same corner contributes a small baseline
+    (max 0.0057 ratio measured on wilderness frames); the Safe Zone line
+    roughly quintuples it (0.029 measured), so gate midway at 0.012."""
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+    h, w = frame_bgr.shape[:2]
+    roi = frame_bgr[int(h * 0.02):int(h * 0.12), int(w * 0.80):int(w * 0.88)]
+    if roi.size == 0:
+        return False
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([40, 120, 120]), np.array([80, 255, 255]))
+    return (float(np.count_nonzero(green)) / green.size) >= 0.012
+
+
 def classify_ore_dots(minimap_bgr):
     """Return ore dots on minimap as [x, y, tier, kind] (pickaxe-like markers)."""
     if minimap_bgr is None or minimap_bgr.size == 0:

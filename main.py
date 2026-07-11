@@ -35,7 +35,7 @@ from config import (
     STUCK_VOTE_RESET_CONSECUTIVE, HARD_STUCK_RESET_SECONDS,
     CORNER_ESCAPE_COOLDOWN_SECONDS, CORNER_ESCAPE_MAX_ATTEMPTS_BEFORE_RESET,
     VOTE_RESET_COOLDOWN_SECONDS, VOTE_RESET_FAIL_COOLDOWN_SECONDS, VOTE_RESET_ENEMY_GRACE_SECONDS,
-    VOTE_RESET_UNAVAILABLE_RETRY_SECONDS,
+    VOTE_RESET_UNAVAILABLE_RETRY_SECONDS, VOTE_RESET_INTERACT_KEY,
     VOTE_RESET_FAIL_STREAK_LOCKOUT_COUNT, VOTE_RESET_FAIL_LOCKOUT_SECONDS,
     VOTE_RESET_MIN_HP, NO_ENEMY_RESET_MIN_FRAMES,
     ZONE_MAX_SECONDS_BEFORE_RESET, ZONE_MIN_EXPLORE_BEFORE_RESET_SECONDS,
@@ -89,7 +89,7 @@ from config import (
 )
 from detectors import (
     classify_enemy_dots, get_hp_percent,
-    is_death_screen, is_world_map_visible,
+    is_death_screen, is_world_map_visible, is_safe_zone_banner_visible,
     is_pause_menu_visible, is_options_menu_visible, is_inventory_panel_visible,
     find_ore_nodes_on_screen, detect_mining_qte_window,
     find_item_tags_on_screen,
@@ -125,7 +125,7 @@ from input_control import (
 )
 from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
-    pick_zone_from_open_map,
+    pick_zone_from_open_map, wait_for_world_map,
 )
 from debug_utils import DebugRecorder, FrameCapture
 
@@ -276,6 +276,8 @@ def run(
     pause_menu_frames            = 0
     options_menu_frames          = 0
     inventory_panel_frames       = 0
+    safe_zone_banner_frames      = 0
+    safe_zone_recover_until      = 0.0
     MENU_CONFIRM_FRAMES_LOCAL    = 2
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
@@ -586,7 +588,11 @@ def run(
             # during normal combat where the bar is clearly visible and healthy.
             _hp_critical = (hp is None or hp <= HP_ZERO_DEAD_THRESHOLD * 5)
             if _enable_death_handling and now_loop >= hp_bar_missing_until and _hp_critical:
-                if is_death_screen(frame):
+                # Static gate: a real death overlay freezes the scene. Red-heavy
+                # zone palettes (MosArathim Desert) trip is_death_screen on
+                # nearly every frame, and momentary HP misreads during combat
+                # opened this branch — but the world was visibly moving then.
+                if is_death_screen(frame) and screen_motion.is_static():
                     death_screen_frames += 1
                 else:
                     death_screen_frames = 0
@@ -742,6 +748,33 @@ def run(
                     tap_key('esc', hold_time=0.12)
                     menu_escape_cooldown_until = now_loop + 0.8
                     inventory_panel_frames = 0
+                    continue
+
+            # ── safe-zone waypoint recovery ───────────────────────────────────
+            # After a vote reset the player is teleported onto the waypoint in
+            # the zone's protected entrance (green 'Safe Zone' banner by the
+            # minimap). Walking first leaves the waypoint and strands the bot
+            # in the safe area — so while the banner is up, press F on the
+            # spot and reselect the zone instead of exploring. The zone-start
+            # grace keeps a freshly picked zone from being instantly re-reset.
+            if not vote_reset_in_progress and now_loop >= safe_zone_recover_until \
+                    and (now_loop - zone_started_t) >= 6.0:
+                if is_safe_zone_banner_visible(frame):
+                    safe_zone_banner_frames += 1
+                else:
+                    safe_zone_banner_frames = 0
+                if safe_zone_banner_frames >= 2:
+                    safe_zone_banner_frames = 0
+                    safe_zone_recover_until = now_loop + 10.0
+                    release_all_inputs()
+                    attack_held = False
+                    print("[SAFE] Safe Zone banner -> pressing F on waypoint to reselect zone")
+                    tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
+                    map_visible, map_frame = wait_for_world_map(
+                        sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
+                    if map_visible and pick_zone_from_open_map(
+                            sct, full_mon, map_frame, target_zone=target_zone) is True:
+                        _do_zone_reset()
                     continue
 
             # ── capture minimap ───────────────────────────────────────────────
