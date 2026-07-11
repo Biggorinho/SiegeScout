@@ -51,6 +51,11 @@ def right_mouse_click(hold_time=0.05):
     ctypes.windll.user32.mouse_event(0x0010, 0, 0, 0, 0)
 
 
+def move_cursor_to(x, y):
+    """Move the cursor without clicking (e.g. park it off UI buttons)."""
+    ctypes.windll.user32.SetCursorPos(int(x), int(y))
+
+
 def left_click_at(x, y, hold_time=0.05, settle_time=0.0):
     """Click at (x, y). settle_time > 0 waits between the cursor move and the
     press so UI buttons register the hover first — menus can drop a click whose

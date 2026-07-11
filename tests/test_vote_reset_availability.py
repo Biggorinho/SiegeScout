@@ -98,6 +98,24 @@ def test_sequence_reports_unavailable_and_closes_menu(monkeypatch):
                         lambda k, hold_time=0.05: keys.append(k))
     monkeypatch.setattr(combat, "sleep_interruptible", lambda s: True)
     monkeypatch.setattr(combat, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(combat, "move_cursor_to", lambda x, y: None)
     result = combat.run_vote_reset_sequence(None, None, target_zone="X")
     assert result == "unavailable"
     assert "esc" in keys, "menu must be closed, not left open over gameplay"
+
+
+def test_sequence_parks_cursor_before_scanning_menu(monkeypatch):
+    """The cursor sprite + hover highlight left on a button by an earlier
+    click corrupts its red bar and derails row detection (mis-clicks on
+    Options/Resume) — the cursor must be parked away before the scan."""
+    order = []
+    monkeypatch.setattr(combat, "_ensure_pause_menu_open", lambda s, m: True)
+    monkeypatch.setattr(combat, "_click_vote_reset_menu_button",
+                        lambda s, m, a: order.append("click") or "unavailable")
+    monkeypatch.setattr(combat, "tap_key", lambda k, hold_time=0.05: None)
+    monkeypatch.setattr(combat, "sleep_interruptible", lambda s: True)
+    monkeypatch.setattr(combat, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(combat, "move_cursor_to",
+                        lambda x, y: order.append("park"))
+    combat.run_vote_reset_sequence(None, None, target_zone="X")
+    assert order[:2] == ["park", "click"]

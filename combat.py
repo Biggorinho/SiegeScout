@@ -31,7 +31,7 @@ from minimap import buffered_walkable_mask, random_explore_delta
 from pathfinding import ray_walkability_score
 from input_control import (
     tap_key, sleep_interruptible, left_click_at,
-    release_all_inputs, wasd_move,
+    release_all_inputs, wasd_move, move_cursor_to,
 )
 
 
@@ -889,6 +889,10 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
         print("[RST] pause menu not confirmed -> using force fallback")
         return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
 
+    # Park the cursor away from the button stack before scanning: the cursor
+    # sprite + hover highlight left on a row by an earlier click corrupt its
+    # red bar, and the resulting bad row counts caused wrong-button clicks.
+    move_cursor_to(int(SCREEN_W * 0.30), int(SCREEN_H * 0.45))
     sleep_interruptible(VOTE_RESET_MENU_SETTLE_SECONDS + 0.3)
 
     clicked = _click_vote_reset_menu_button(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
