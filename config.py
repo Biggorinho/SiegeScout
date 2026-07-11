@@ -302,7 +302,12 @@ DOT_CONFIDENCE_MAX                  = 8
 ATTACK_TIMEOUT = 10.0
 FLEE_MAX_WAIT  = 15.0
 
-ATTACK_IDLE_VOTE_RESET_SECONDS          = 3.0
+# The game locks Vote Reset for ~10s after the player deals or takes a hit.
+# The pre-reset spin + menu open add ~4-5s after this idle threshold fires,
+# so 7s idle puts the button check at ~11-12s past the last hit — just
+# outside the lock. (Was 3.0: the check landed at ~7.5s, inside the lock,
+# so most attempts clicked a disabled button.)
+ATTACK_IDLE_VOTE_RESET_SECONDS          = 7.0
 STUCK_VOTE_RESET_CONSECUTIVE            = 3
 STUCK_COUNT_EVENT_COOLDOWN_SECONDS      = 1.2
 HARD_STUCK_RESET_SECONDS               = 20.0

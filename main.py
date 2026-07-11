@@ -996,7 +996,7 @@ def run(
                 if attack_held:
                     attack_key_up()
                     attack_held = False
-                print("No attack for 5s -> Vote Reset")
+                print(f"No attack for {ATTACK_IDLE_VOTE_RESET_SECONDS:.0f}s -> Vote Reset")
                 _attempt_vote_reset(with_spin=True)
                 continue
 
