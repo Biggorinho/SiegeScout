@@ -4,3 +4,4 @@ mss>=6.1
 keyboard>=0.13
 Pillow>=9.0
 httpx>=0.24
+onnxruntime>=1.20

@@ -60,6 +60,31 @@ ROBOFLOW_ENEMY_DUNGEON_CLASSES = ["enemy", "teleport"]
 ROBOFLOW_MINIMAP_VISION_ENABLED = False  # Detects enemies/items/portals on the minimap
 ROBOFLOW_MINIMAP_VISION_CLASSES = ["player"]  # Can also use: dungeon, enter, exit, portal, ore*
 
+# ── Local ONNX models (shipped path — no cloud, CPU-only) ───────────────────
+# Weights are produced by training/train_minimap_colab.ipynb and dropped into
+# assets/models/. Flags stay OFF until a model beats the heuristic baseline on
+# the eval set (acceptance gate in docs/superpowers/specs/2026-07-10-cv-
+# recognition-improvements-design.md). Missing weights fail soft either way.
+_MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "models")
+
+LOCAL_MINIMAP_MODEL_ENABLED = False
+LOCAL_MINIMAP_MODEL_PATH = os.path.join(_MODELS_DIR, "minimap.onnx")
+# Order must match the training notebook's KEEP_CLASSES (= the model's names).
+# Trained on 249 real minimap crops the user labeled in Roboflow (incl. an
+# `enemy` class the heuristics detect poorly — baseline enemy recall ~0.34).
+LOCAL_MINIMAP_MODEL_CLASSES = [
+    "enemy", "player", "portal", "dungeon", "enter", "exit",
+    "oreGold", "oreGreen", "oreRuby",
+]
+LOCAL_MINIMAP_MODEL_INPUT_SIZE = 480  # static export size; must match training
+LOCAL_MINIMAP_MODEL_CONF = 0.40
+
+LOCAL_SCREEN_MODEL_ENABLED = False    # no dataset yet — placeholder wiring
+LOCAL_SCREEN_MODEL_PATH = os.path.join(_MODELS_DIR, "screen.onnx")
+LOCAL_SCREEN_MODEL_CLASSES = ["enemy", "healthbar", "teleport"]
+LOCAL_SCREEN_MODEL_INPUT_SIZE = 416
+LOCAL_SCREEN_MODEL_CONF = 0.40
+
 MINIMAP_SMALL = {
     "left":   _px(1673),
     "top":    _px(7),

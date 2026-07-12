@@ -213,11 +213,15 @@ def main(argv=None) -> int:
     parser.add_argument("--captures", default="eval/captures",
                         help="root folder holding session_* capture dirs")
     parser.add_argument("--detector", default="heuristic",
-                        help="backend name (heuristic)")
+                        help="backend name (heuristic, onnx) or 'all'")
     args = parser.parse_args(argv)
-    backend = get_backend(args.detector)
-    report = evaluate_backend(backend, args.captures)
-    print(format_report(backend.name, report))
+    names = ["heuristic", "onnx"] if args.detector == "all" else [args.detector]
+    for i, name in enumerate(names):
+        if i:
+            print()
+        backend = get_backend(name)
+        report = evaluate_backend(backend, args.captures)
+        print(format_report(backend.name, report))
     return 0
 
 

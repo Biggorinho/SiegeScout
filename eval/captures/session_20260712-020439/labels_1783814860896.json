@@ -1,0 +1,21 @@
+{
+ "frame": "",
+ "minimap": "minimap_1783814860896.png",
+ "minimap_points": [
+  {
+   "x": 95.0,
+   "y": 124.5,
+   "cls": "portal"
+  },
+  {
+   "x": 122.5,
+   "y": 121.0,
+   "cls": "player"
+  }
+ ],
+ "screen_boxes": [],
+ "terrain_strokes": {
+  "wrongly_blocked": [],
+  "wrongly_open": []
+ }
+}

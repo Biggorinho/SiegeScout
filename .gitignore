@@ -30,3 +30,13 @@ debug/
 roboflow_key.txt
 
 eval/captures/**/*.png
+
+# ML dataset exports & training scratch (large, regenerable, or local-only).
+# The shipped weights in assets/models/*.onnx ARE committed; these are not.
+*.zip
+training/datasets/
+training/runs/
+training/screen_dataset_raw/
+
+# Loose screenshots dropped in the project root
+Screenshot *.png

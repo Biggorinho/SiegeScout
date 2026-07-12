@@ -87,6 +87,8 @@ from config import (
     DOT_CONFIDENCE_DECAY_PER_MISS,
     DOT_CONFIDENCE_MAX,
 )
+import config
+import fusion
 from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible, is_safe_zone_banner_visible,
@@ -264,6 +266,21 @@ def run(
     attack_stuck                 = StuckDetector(window=ATTACK_STUCK_WINDOW, min_move=ATTACK_STUCK_MIN_MOVE)
     cached_mask                  = None
     companion                    = CompanionSuppressor()
+    # Local ML minimap detector (spec §3): None unless enabled AND the model
+    # loads. When present, its enemy detections are fused into the heuristic
+    # dots each tick; any failure leaves it None and the bot runs as before.
+    minimap_ml = None
+    if config.LOCAL_MINIMAP_MODEL_ENABLED:
+        from local_inference import OnnxDetector
+        _mm = OnnxDetector(
+            config.LOCAL_MINIMAP_MODEL_PATH,
+            config.LOCAL_MINIMAP_MODEL_CLASSES,
+            config.LOCAL_MINIMAP_MODEL_INPUT_SIZE,
+            conf_threshold=config.LOCAL_MINIMAP_MODEL_CONF,
+        )
+        minimap_ml = _mm if _mm.available else None
+        print(f"[MINIMAP_ML] enabled; detector "
+              f"{'ready' if minimap_ml else 'unavailable — heuristics only'}")
     minimap_mode                 = "small"
     last_attack_activity_t       = time.time()
     zone_had_attack              = False
@@ -902,6 +919,11 @@ def run(
 
             # ── enemy detection ───────────────────────────────────────────────
             enemy_dots = classify_enemy_dots(minimap)
+            if minimap_ml is not None:
+                # Fuse in enemies the heuristic missed (recall 0.36 -> 0.74 on
+                # the eval set). Additive only: never removes a heuristic dot.
+                _ml_dets = minimap_ml.detect(minimap)
+                enemy_dots = fusion.fuse_enemy_dots(enemy_dots, _ml_dets.get("enemy", []))
             dots       = [(x, y) for x, y, _, _ in enemy_dots]
             center = minimap_center_from_image(minimap)
 

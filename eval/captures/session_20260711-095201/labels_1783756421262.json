@@ -1,0 +1,26 @@
+{
+ "frame": "",
+ "minimap": "minimap_1783756421262.png",
+ "minimap_points": [
+  {
+   "x": 119.0,
+   "y": 117.0,
+   "cls": "player"
+  },
+  {
+   "x": 190.0,
+   "y": 120.0,
+   "cls": "enemy"
+  },
+  {
+   "x": 192.0,
+   "y": 118.0,
+   "cls": "enemy"
+  }
+ ],
+ "screen_boxes": [],
+ "terrain_strokes": {
+  "wrongly_blocked": [],
+  "wrongly_open": []
+ }
+}

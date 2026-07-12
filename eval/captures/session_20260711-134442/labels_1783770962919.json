@@ -1,0 +1,51 @@
+{
+ "frame": "",
+ "minimap": "minimap_1783770962919.png",
+ "minimap_points": [
+  {
+   "x": 119.0,
+   "y": 117.5,
+   "cls": "player"
+  },
+  {
+   "x": 209.0,
+   "y": 170.0,
+   "cls": "ore"
+  },
+  {
+   "x": 54.5,
+   "y": 170.0,
+   "cls": "ore"
+  },
+  {
+   "x": 69.5,
+   "y": 183.5,
+   "cls": "ore"
+  },
+  {
+   "x": 22.5,
+   "y": 124.0,
+   "cls": "ore"
+  },
+  {
+   "x": 16.0,
+   "y": 132.5,
+   "cls": "ore"
+  },
+  {
+   "x": 30.5,
+   "y": 190.0,
+   "cls": "ore"
+  },
+  {
+   "x": 226.5,
+   "y": 176.0,
+   "cls": "ore"
+  }
+ ],
+ "screen_boxes": [],
+ "terrain_strokes": {
+  "wrongly_blocked": [],
+  "wrongly_open": []
+ }
+}
