@@ -1248,6 +1248,14 @@ def run(
                         raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
                         if raw_ore_dots:
                             last_minimap_ore_t = now_loop
+                        # Capture a full frame for on-screen resource labeling
+                        # only when an ore/item dot is close to the player on
+                        # the minimap (so the resource is actually on screen).
+                        if config.CAPTURE_LOOT_FRAMES:
+                            _near = config.CAPTURE_LOOT_NEAR_PX
+                            if any(dot_distance(d, center) <= _near for d in raw_ore_dots) or \
+                               any(dot_distance(d, center) <= _near for d in raw_item_dots):
+                                frame_capture.save_loot_frame(now_loop, frame)
                         if (raw_item_dots or raw_ore_dots) and (now_loop - last_resource_log_t) >= 1.0:
                             print(f"[LOOT] minimap: {len(raw_item_dots)} item(s) {len(raw_ore_dots)} ore on map")
                             last_resource_log_t = now_loop
@@ -1390,10 +1398,6 @@ def run(
                     if mining_should_scan:
                         ores_on_screen = find_ore_nodes_on_screen(frame)
                         last_mining_scan_t = now_loop
-                        # Save the full frame for labeling an on-screen ore
-                        # detector: these are frames where ore should be
-                        # clickable on screen (minimap says ore is near).
-                        frame_capture.save_loot_frame(now_loop, frame)
 
                     if ores_on_screen:
                         px, py = SCREEN_W // 2, SCREEN_H // 2
@@ -1446,7 +1450,6 @@ def run(
                     if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
-                        frame_capture.save_loot_frame(now_loop, frame)  # label set
 
                         if items_on_screen:
                             px, py = SCREEN_W // 2, SCREEN_H // 2

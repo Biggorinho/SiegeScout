@@ -323,6 +323,11 @@ CAPTURE_MAX_PAIRS                   = 400
 CAPTURE_LOOT_FRAMES                 = True
 CAPTURE_LOOT_INTERVAL_SECONDS       = 1.5
 CAPTURE_LOOT_MAX                    = 300
+# Only capture when an ore/item dot sits within this many px of the player on
+# the minimap — i.e. the resource is actually near/on-screen and worth
+# labeling. Gating on the reliable minimap proximity (not the noisy on-screen
+# heuristic) avoids the false-positive frames. ~2x the 18px pickup distance.
+CAPTURE_LOOT_NEAR_PX                = _px(40)
 
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)
