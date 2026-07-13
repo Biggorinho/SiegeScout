@@ -299,6 +299,9 @@ class FrameCapture:
         base_dir: str,
         interval_seconds: float,
         max_pairs: int,
+        loot_enabled: bool = False,
+        loot_interval_seconds: float = 1.5,
+        loot_max: int = 300,
     ) -> None:
         self._enabled = bool(enabled)
         self._base_dir = str(base_dir)
@@ -309,6 +312,13 @@ class FrameCapture:
         self._saved_pairs = 0
         self._disabled_due_to_error = False
         self._cap_logged = False
+        # Targeted loot-frame capture (own rate-limit / cap / counter).
+        self._loot_enabled = bool(loot_enabled)
+        self._loot_interval = float(loot_interval_seconds)
+        self._loot_max = int(loot_max)
+        self._loot_last_save: float = -1e9
+        self._loot_saved = 0
+        self._loot_cap_logged = False
 
     def maybe_save(self, now: float, frame_bgr, minimap_bgr) -> str | None:
         """Save a frame+minimap pair if the interval elapsed. Returns frame path."""
@@ -343,3 +353,40 @@ class FrameCapture:
         self._last_save_at = now
         self._saved_pairs += 1
         return frame_path
+
+    def save_loot_frame(self, now: float, frame_bgr) -> str | None:
+        """Save the full frame to a loot/ subdir when resources are on screen.
+
+        A targeted dataset (full frames only, no minimap) for labeling an
+        on-screen ore/item detector. Independent rate-limit, cap, and counter
+        from the eval-pair capture; shares the session dir and fail-soft
+        disable. Returns the saved path or None.
+        """
+        if not self._loot_enabled or self._disabled_due_to_error:
+            return None
+        if self._loot_saved >= self._loot_max:
+            if not self._loot_cap_logged:
+                print(f"[LOOTCAP] reached {self._loot_max} loot frames — stopped")
+                self._loot_cap_logged = True
+            return None
+        if (now - self._loot_last_save) < self._loot_interval:
+            return None
+        if frame_bgr is None or getattr(frame_bgr, "size", 0) == 0:
+            return None
+        try:
+            if self._session_dir is None:
+                session = time.strftime("session_%Y%m%d-%H%M%S")
+                self._session_dir = os.path.join(self._base_dir, session)
+                os.makedirs(self._session_dir, exist_ok=True)
+            loot_dir = os.path.join(self._session_dir, "loot")
+            os.makedirs(loot_dir, exist_ok=True)
+            path = os.path.join(loot_dir, f"lootframe_{int(now * 1000)}.png")
+            if not cv2.imwrite(path, frame_bgr):
+                raise OSError(f"cv2.imwrite returned False for {path}")
+        except OSError as exc:
+            self._disabled_due_to_error = True
+            print(f"[LOOTCAP] disk error: {exc} — capture disabled")
+            return None
+        self._loot_last_save = now
+        self._loot_saved += 1
+        return path

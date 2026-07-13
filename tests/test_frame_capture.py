@@ -77,3 +77,40 @@ def test_disk_error_disables_capture(tmp_path):
     assert cap.maybe_save(1.0, _frame(), _minimap()) is None
     # Stays disabled, does not raise on further calls.
     assert cap.maybe_save(2.0, _frame(), _minimap()) is None
+
+
+def _make_loot(tmp_path, loot_enabled=True, loot_interval=1.5, loot_max=5):
+    return FrameCapture(
+        enabled=True, base_dir=str(tmp_path), interval_seconds=2.0,
+        max_pairs=10, loot_enabled=loot_enabled,
+        loot_interval_seconds=loot_interval, loot_max=loot_max,
+    )
+
+
+def test_loot_capture_disabled_by_default(tmp_path):
+    cap = _make(tmp_path)  # no loot_* args -> loot capture off
+    assert cap.save_loot_frame(1.0, _frame()) is None
+
+
+def test_loot_frame_saved_into_loot_subdir(tmp_path):
+    cap = _make_loot(tmp_path)
+    path = cap.save_loot_frame(1.0, _frame())
+    assert path is not None and os.path.exists(path)
+    assert os.path.basename(os.path.dirname(path)) == "loot"
+    assert os.path.basename(path).startswith("lootframe_")
+
+
+def test_loot_capture_has_independent_rate_limit_and_cap(tmp_path):
+    cap = _make_loot(tmp_path, loot_interval=1.5, loot_max=2)
+    assert cap.save_loot_frame(1.0, _frame()) is not None
+    assert cap.save_loot_frame(2.0, _frame()) is None      # 1.0s < 1.5s
+    assert cap.save_loot_frame(3.0, _frame()) is not None   # 2.0s later
+    assert cap.save_loot_frame(9.0, _frame()) is None       # cap reached
+    # The eval-pair capture is unaffected by loot saves.
+    assert cap.maybe_save(1.0, _frame(), _minimap()) is not None
+
+
+def test_loot_capture_skips_empty_frame(tmp_path):
+    cap = _make_loot(tmp_path)
+    assert cap.save_loot_frame(1.0, None) is None
+    assert cap.save_loot_frame(1.0, np.zeros((0, 0, 3), np.uint8)) is None

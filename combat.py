@@ -746,11 +746,16 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
     return True
 
 
-def _force_vote_reset_click_sequence(sct, full_mon, attempts):
-    """Last-resort vote reset click path when pause confirmation is unreliable.
+def _force_vote_reset_click_sequence(sct, full_mon, attempts, esc_already_sent=False):
+    """Blind-click the vote-reset button when the pause detector can't confirm.
 
-    This intentionally mirrors the old behavior: attempt click + interact even if
-    pause detector does not confirm the menu skin.
+    Clicks the fixed button positions + interact even without a confirmed menu
+    skin, verifying success by whether the world map opens.
+
+    `esc_already_sent`: when the caller (`_ensure_pause_menu_open`) has already
+    pressed the single menu-opening ESC, do NOT press another one here — ESC
+    toggles the menu, so a second press would close the menu we're about to
+    click.
     """
     print("[RST] force vote-reset click fallback")
     frame = grab_frame_bgr(sct, full_mon)
@@ -760,7 +765,7 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
             return False
         frame = grab_frame_bgr(sct, full_mon)
 
-    if not is_pause_menu_visible(frame):
+    if not esc_already_sent and not is_pause_menu_visible(frame):
         tap_key('esc', hold_time=0.12)
         if not sleep_interruptible(0.65):
             return False
@@ -809,7 +814,21 @@ def _force_vote_reset_click_sequence(sct, full_mon, attempts):
 
 
 def _ensure_pause_menu_open(sct, full_mon):
-    """Ensure pause menu is visible. Maximum two ESC presses to avoid toggling."""
+    """Open the pause menu with a SINGLE ESC (ESC toggles it).
+
+    Root cause of the old ~9x/run "could not open pause menu" failures: this
+    used to press ESC up to twice. When the red-bar detector missed a menu
+    that had just opened after the first ESC (0.65s is too early for the skin
+    to fade in, and a lava-red zone fights a red detector), the second ESC
+    TOGGLED the menu closed — so it always ended closed, and the confirm-fail
+    dump captured that closed frame, hiding the real state. The blind-click
+    fallback then reopened it with its own (odd) ESC and succeeded, proving a
+    single ESC from gameplay reliably opens the menu.
+
+    So: press ESC once, poll while the skin fades in, and NEVER press a second
+    (closing) ESC. If detection still misses it, the menu is open anyway — the
+    caller blind-clicks it without re-pressing ESC.
+    """
     frame = grab_frame_bgr(sct, full_mon)
 
     if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
@@ -817,30 +836,25 @@ def _ensure_pause_menu_open(sct, full_mon):
         return True
 
     if is_world_map_visible(frame):
-        tap_key('esc', hold_time=0.10)
+        tap_key('esc', hold_time=0.10)  # close the map back to gameplay first
         sleep_interruptible(0.45)
 
     print("[RST] pressing ESC to open pause menu")
     tap_key('esc', hold_time=0.12)
-    sleep_interruptible(0.65)
 
-    frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
-        print("[RST] pause menu confirmed")
-        return True
+    # The menu skin fades in — poll instead of a single early grab.
+    for _ in range(4):
+        sleep_interruptible(0.30)
+        frame = grab_frame_bgr(sct, full_mon)
+        if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
+            print("[RST] pause menu confirmed")
+            return True
 
-    tap_key('esc', hold_time=0.12)
-    sleep_interruptible(0.85)
-
-    frame = grab_frame_bgr(sct, full_mon)
-    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
-        print("[RST] pause menu confirmed (second ESC)")
-        return True
-
-    # The force fallback that follows usually succeeds, meaning the menu WAS
-    # open but undetected — dump the frame so the detection gap can be seen.
-    _dump_debug_frame(frame, "pausemenu_confirm_fail")
-    print("[RST] could not open pause menu reliably")
+    # Menu is open (the single ESC opened it) but the detector missed it. Dump
+    # for detection tuning — this frame now shows the OPEN menu — and let the
+    # caller click without another ESC that would toggle it closed.
+    _dump_debug_frame(frame, "pausemenu_open_undetected")
+    print("[RST] menu opened but unconfirmed -> blind-click without re-ESC")
     return False
 
 
@@ -899,8 +913,9 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
     sleep_interruptible(0.50)
 
     if not _ensure_pause_menu_open(sct, full_mon):
-        print("[RST] pause menu not confirmed -> using force fallback")
-        return _force_vote_reset_click_sequence(sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS)
+        print("[RST] menu open but unconfirmed -> blind-click (no re-ESC)")
+        return _force_vote_reset_click_sequence(
+            sct, full_mon, VOTE_RESET_CLICK_ATTEMPTS, esc_already_sent=True)
 
     # Park the cursor away from the button stack before scanning: the cursor
     # sprite + hover highlight left on a row by an earlier click corrupt its

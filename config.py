@@ -67,7 +67,7 @@ ROBOFLOW_MINIMAP_VISION_CLASSES = ["player"]  # Can also use: dungeon, enter, ex
 # recognition-improvements-design.md). Missing weights fail soft either way.
 _MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "models")
 
-LOCAL_MINIMAP_MODEL_ENABLED = False
+LOCAL_MINIMAP_MODEL_ENABLED = True
 LOCAL_MINIMAP_MODEL_PATH = os.path.join(_MODELS_DIR, "minimap.onnx")
 # Order must match the training notebook's KEEP_CLASSES (= the model's names).
 # Trained on 249 real minimap crops the user labeled in Roboflow (incl. an
@@ -314,6 +314,15 @@ ENABLE_FRAME_CAPTURE                = True
 CAPTURE_DIR                         = os.path.join("eval", "captures")
 CAPTURE_INTERVAL_SECONDS            = 2.0
 CAPTURE_MAX_PAIRS                   = 400
+
+# ── Targeted loot-frame capture (dev tooling for the on-screen resource model)
+# Saves the FULL game frame (no minimap) into a loot/ subfolder whenever the
+# bot scans for on-screen ore/items — a dataset dense with clickable resources
+# to label an on-screen ore/item detector (the minimap can't be clicked; the
+# heuristic on-screen finder is what makes looting miss). Own rate-limit + cap.
+CAPTURE_LOOT_FRAMES                 = True
+CAPTURE_LOOT_INTERVAL_SECONDS       = 1.5
+CAPTURE_LOOT_MAX                    = 300
 
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)

@@ -234,6 +234,9 @@ def run(
         base_dir=CAPTURE_DIR,
         interval_seconds=CAPTURE_INTERVAL_SECONDS,
         max_pairs=CAPTURE_MAX_PAIRS,
+        loot_enabled=config.CAPTURE_LOOT_FRAMES,
+        loot_interval_seconds=config.CAPTURE_LOOT_INTERVAL_SECONDS,
+        loot_max=config.CAPTURE_LOOT_MAX,
     )
     last_periodic_debug_t        = 0.0
     counters                     = DetectionCounters(zone_started_at=time.time())
@@ -1387,6 +1390,10 @@ def run(
                     if mining_should_scan:
                         ores_on_screen = find_ore_nodes_on_screen(frame)
                         last_mining_scan_t = now_loop
+                        # Save the full frame for labeling an on-screen ore
+                        # detector: these are frames where ore should be
+                        # clickable on screen (minimap says ore is near).
+                        frame_capture.save_loot_frame(now_loop, frame)
 
                     if ores_on_screen:
                         px, py = SCREEN_W // 2, SCREEN_H // 2
@@ -1439,6 +1446,7 @@ def run(
                     if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
+                        frame_capture.save_loot_frame(now_loop, frame)  # label set
 
                         if items_on_screen:
                             px, py = SCREEN_W // 2, SCREEN_H // 2

@@ -23,7 +23,7 @@ _DEFAULT_ML_TIER = 1
 
 
 def fuse_enemy_dots(heuristic_dots, ml_enemy_dets, merge_dist=6.0,
-                    min_conf=0.5, default_tier=_DEFAULT_ML_TIER):
+                    min_conf=0.65, default_tier=_DEFAULT_ML_TIER):
     """Return heuristic enemy dots augmented with ML-only detections.
 
     Args:
