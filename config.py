@@ -381,6 +381,11 @@ SATANIC_NODE_SCAN_ATTEMPTS       = 5
 SATANIC_NODE_SCAN_RETRY_SECONDS   = 0.20
 
 MAP_DETECT_TIMEOUT_SECONDS  = 3.2
+# After a VERIFIED Vote Reset click the zone-select map only auto-opens once
+# the vote passes (other players / auto-resolve) — that takes seconds. With the
+# default 3.2s wait the sequence declared failure 2s before the map appeared
+# and the stray-map net ESC'd it away (2026-07-18 22:05, 10min safe-zone idle).
+VOTE_RESET_MAP_WAIT_SECONDS = 10.0
 MAP_DETECT_POLL_SECONDS     = 0.18
 MAP_INTERACT_RETRY_SECONDS  = 0.80
 MAP_OPEN_DELAY_SECONDS      = 0.55

@@ -6,6 +6,7 @@ import time
 from config import (
     SCREEN_W, SCREEN_H,
     MAP_DETECT_TIMEOUT_SECONDS, MAP_DETECT_POLL_SECONDS,
+    VOTE_RESET_MAP_WAIT_SECONDS,
     MAP_INTERACT_RETRY_SECONDS, MAP_OPEN_DELAY_SECONDS,
     MAP_SELECT_SETTLE_SECONDS, MAP_NODE_CLICK_Y_OFFSET_FRAC,
     FALLBACK_NODE_X_FRAC, FALLBACK_NODE_Y_FRAC,
@@ -35,9 +36,14 @@ from input_control import (
 )
 
 
-def wait_for_world_map(sct, full_mon, retry_interact_key=None):
-    """Wait until world map is visible; optionally retry interact key while waiting."""
-    deadline     = time.time() + MAP_DETECT_TIMEOUT_SECONDS
+def wait_for_world_map(sct, full_mon, retry_interact_key=None, timeout_seconds=None):
+    """Wait until world map is visible; optionally retry interact key while waiting.
+
+    timeout_seconds overrides MAP_DETECT_TIMEOUT_SECONDS — the post-vote-click
+    wait needs longer (the map auto-opens only once the vote passes)."""
+    if timeout_seconds is None:
+        timeout_seconds = MAP_DETECT_TIMEOUT_SECONDS
+    deadline     = time.time() + timeout_seconds
     next_retry_t = time.time() + MAP_INTERACT_RETRY_SECONDS
     last_frame   = None
 
@@ -752,7 +758,7 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         _dump_debug_frame(frame, f"pausemenu_{len(rows)}rows")
 
     if not _vote_reset_row_is_active(frame, click_y):
-        print(f"[RST] vote reset button disabled (enemies nearby) at y={click_y} -> unavailable")
+        print(f"[RST] vote reset button disabled (enemies near / safe zone / cooldown) at y={click_y} -> unavailable")
         _dump_debug_frame(frame, "votereset_disabled")
         return "unavailable"
 
@@ -941,6 +947,36 @@ def _reopen_world_map_for_recenter(sct, full_mon):
     return grab_frame_bgr(sct, full_mon)
 
 
+_SAFE_ZONE_WALK_CYCLE = ((1, 0), (0, 1), (-1, 0), (0, -1))
+
+
+def safe_zone_walk_delta(attempt_index):
+    """Rotating short-walk direction between failed waypoint-F attempts.
+
+    F only opens the zone map while standing ON the waypoint; after chasing
+    enemies the player often ends a few steps off it (2026-07-18: 60+ F
+    presses in place, 10min idle). Walking a nudge in a cycling direction
+    before each retry sweeps the area until the waypoint is back in range."""
+    return _SAFE_ZONE_WALK_CYCLE[attempt_index % len(_SAFE_ZONE_WALK_CYCLE)]
+
+
+def handle_stray_world_map(sct, full_mon, target_zone=None):
+    """Use a world map found open during gameplay instead of dismissing it.
+
+    An unprompted world map is (virtually always) the zone-select map the game
+    auto-opens once a vote reset passes — the old ESC-it-shut net threw that
+    map away 2s after a reset was mis-reported as failed, stranding the bot in
+    the safe zone for 10min (2026-07-18 22:06). Picking the zone consumes the
+    map AND resumes the farm loop; ESC only when the pick fails.
+    Returns True when the map was consumed by a successful zone pick."""
+    frame = grab_frame_bgr(sct, full_mon)
+    if pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone) is True:
+        return True
+    tap_key('esc', hold_time=0.12)
+    sleep_interruptible(0.35)
+    return False
+
+
 def run_vote_reset_sequence(sct, full_mon, target_zone=None):
     """ESC menu vote reset (Shift+R removed — never reliably works)."""
     release_all_inputs()
@@ -970,7 +1006,12 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
     tap_key(VOTE_RESET_INTERACT_KEY, hold_time=0.08)
     sleep_interruptible(MAP_OPEN_DELAY_SECONDS + 0.4)
 
-    map_visible, frame = wait_for_world_map(sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
+    # The click is verified — the map now only appears once the VOTE PASSES,
+    # which takes seconds (other players / auto-resolve). The default 3.2s
+    # timeout declared failure 2s before the map opened (2026-07-18 22:05).
+    map_visible, frame = wait_for_world_map(
+        sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY,
+        timeout_seconds=VOTE_RESET_MAP_WAIT_SECONDS)
     if map_visible:
         return pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone)
 

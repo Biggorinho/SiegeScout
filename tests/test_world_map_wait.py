@@ -67,3 +67,77 @@ def test_recenter_map_only_unchanged(monkeypatch):
     frame = combat._reopen_world_map_for_recenter(None, None)
     assert frame is not None
     assert ui.keys[:2] == ["esc", combat.VOTE_RESET_INTERACT_KEY]
+
+
+# ── 2026-07-18 22:05 incident: vote reset succeeded but was reported failed ──
+# The vote takes seconds to pass (other players / auto-resolve), the world map
+# auto-opens only AFTER it passes — but wait_for_world_map's default timeout is
+# 3.2s, so the sequence declared failure, and the stray-map net then ESC'd away
+# the auto-opened map instead of using it. The bot idled 10min in the safe zone.
+
+
+def test_wait_for_world_map_honors_timeout_override(monkeypatch):
+    import time as _time
+    ui = _FakeUi(menu=False, map_open=False)
+    ui.install(monkeypatch)
+    t0 = _time.time()
+    visible, _ = combat.wait_for_world_map(None, None, timeout_seconds=0.2)
+    assert visible is False
+    assert (_time.time() - t0) < 1.5, "short override must cut the wait short"
+
+
+def test_vote_reset_sequence_waits_longer_for_vote_to_pass(monkeypatch):
+    """After a verified Vote Reset click the map only appears once the vote
+    passes — the sequence must wait VOTE_RESET_MAP_WAIT_SECONDS (>= 8s), not
+    the default 3.2s map timeout."""
+    from config import VOTE_RESET_MAP_WAIT_SECONDS
+    assert VOTE_RESET_MAP_WAIT_SECONDS >= 8.0
+
+    captured = {}
+
+    def fake_wait(sct, mon, retry_interact_key=None, timeout_seconds=None):
+        captured["timeout"] = timeout_seconds
+        return False, None
+
+    monkeypatch.setattr(combat, "_ensure_pause_menu_open", lambda s, m: True)
+    monkeypatch.setattr(combat, "_click_vote_reset_menu_button",
+                        lambda s, m, a: True)
+    monkeypatch.setattr(combat, "release_all_inputs", lambda: None)
+    monkeypatch.setattr(combat, "move_cursor_to", lambda x, y: None)
+    monkeypatch.setattr(combat, "tap_key", lambda k, hold_time=0.0: None)
+    monkeypatch.setattr(combat, "sleep_interruptible", lambda s: True)
+    monkeypatch.setattr(combat, "wait_for_world_map", fake_wait)
+
+    combat.run_vote_reset_sequence(None, None)
+    assert captured["timeout"] == VOTE_RESET_MAP_WAIT_SECONDS
+
+
+def test_handle_stray_world_map_picks_zone_instead_of_esc(monkeypatch):
+    """A world map open during gameplay is (virtually always) the post-vote
+    zone-select map — consume it by picking the zone, don't ESC it away."""
+    ui = _FakeUi(menu=False, map_open=True)
+    ui.install(monkeypatch)
+    monkeypatch.setattr(combat, "pick_zone_from_open_map",
+                        lambda s, m, f, target_zone=None: True)
+    assert combat.handle_stray_world_map(None, None) is True
+    assert "esc" not in ui.keys, "usable map must not be ESC'd away"
+
+
+def test_handle_stray_world_map_escs_when_pick_fails(monkeypatch):
+    ui = _FakeUi(menu=False, map_open=True)
+    ui.install(monkeypatch)
+    monkeypatch.setattr(combat, "pick_zone_from_open_map",
+                        lambda s, m, f, target_zone=None: False)
+    assert combat.handle_stray_world_map(None, None) is False
+    assert ui.keys.count("esc") == 1, "unusable map falls back to a single ESC"
+
+
+def test_safe_zone_walk_delta_cycles_directions():
+    """F only works ON the waypoint; after a failed F the bot must walk a short
+    nudge in a rotating direction (2026-07-18: 60+ F presses in place, 10min).
+    The cycle must cover 4 distinct directions and wrap."""
+    deltas = [combat.safe_zone_walk_delta(i) for i in range(4)]
+    assert len(set(deltas)) == 4
+    for dx, dy in deltas:
+        assert (dx, dy) != (0, 0)
+    assert combat.safe_zone_walk_delta(4) == deltas[0]

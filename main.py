@@ -129,6 +129,7 @@ from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map, wait_for_world_map,
     undo_esc_if_pause_menu_opened, pause_menu_stack_confirmed,
+    handle_stray_world_map, safe_zone_walk_delta,
 )
 from debug_utils import DebugRecorder, FrameCapture
 
@@ -299,6 +300,7 @@ def run(
     inventory_panel_frames       = 0
     safe_zone_banner_frames      = 0
     safe_zone_recover_until      = 0.0
+    safe_zone_f_failures         = 0
     MENU_CONFIRM_FRAMES_LOCAL    = 2
     auto_q_ignore_until          = 0.0
     zone_transition_until        = 0.0
@@ -493,12 +495,14 @@ def run(
             auto_esc_ignore_until = attempt_t + 1.0
             ok = _run_vote_reset(target_zone)
             if ok == "unavailable":
-                # Disabled Vote Reset button = the game sees enemies nearby that
-                # our detection missed. Not a click failure (no fail streak);
-                # back off briefly so EXPLORE can go find them, then retry.
+                # Disabled Vote Reset button = the game blocks the vote right
+                # now: enemies nearby our detection missed, standing in the
+                # safe zone (confirmed 2026-07-18: red coverage 0.05 on the
+                # safe-zone menu = true disabled skin), or vote cooldown. Not a
+                # click failure (no fail streak); back off briefly, then retry.
                 vote_reset_fail_streak = 0
                 vote_reset_lockout_until = max(vote_reset_lockout_until, attempt_t + VOTE_RESET_UNAVAILABLE_RETRY_SECONDS)
-                print(f"[RST] vote reset unavailable (enemies nearby) -> retry in {VOTE_RESET_UNAVAILABLE_RETRY_SECONDS:.0f}s")
+                print(f"[RST] vote reset unavailable (enemies near / safe zone / cooldown) -> retry in {VOTE_RESET_UNAVAILABLE_RETRY_SECONDS:.0f}s")
                 return False
             if ok:
                 vote_reset_fail_streak = 0
@@ -838,7 +842,17 @@ def run(
                         sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY)
                     if map_visible and pick_zone_from_open_map(
                             sct, full_mon, map_frame, target_zone=target_zone) is True:
+                        safe_zone_f_failures = 0
                         _do_zone_reset()
+                    else:
+                        # F only works ON the waypoint — after chasing enemies
+                        # the player often ends a few steps off it (2026-07-18:
+                        # 60+ F presses in place, 10min idle). Walk a rotating
+                        # nudge so the next attempt fires from a new spot.
+                        wdx, wdy = safe_zone_walk_delta(safe_zone_f_failures)
+                        safe_zone_f_failures += 1
+                        print(f"[SAFE] F had no effect (x{safe_zone_f_failures}) -> walk nudge ({wdx},{wdy})")
+                        wasd_move(wdx, wdy, 0.55)
                     continue
 
             # ── stray world map net ───────────────────────────────────────────
@@ -852,9 +866,18 @@ def run(
                 else:
                     world_map_frames = 0
                 if world_map_frames >= 2 and screen_motion.is_static():
-                    print("[MENU] world map open during gameplay — ESC")
+                    # An unprompted map is (virtually always) the zone-select
+                    # map auto-opened by a passed vote reset — USE it. The old
+                    # plain ESC threw away the map 2s after a reset was
+                    # mis-reported failed and stranded the bot in the safe
+                    # zone for 10min (2026-07-18 22:06). ESC only if no zone
+                    # can be picked from it.
+                    print("[MENU] world map open during gameplay — trying zone pick")
                     auto_esc_ignore_until = time.time() + 1.0
-                    tap_key('esc', hold_time=0.12)
+                    if handle_stray_world_map(sct, full_mon, target_zone=target_zone):
+                        print("[MENU] stray map consumed -> zone picked")
+                        safe_zone_f_failures = 0
+                        _do_zone_reset()
                     menu_escape_cooldown_until = now_loop + 0.8
                     world_map_frames = 0
                     continue
