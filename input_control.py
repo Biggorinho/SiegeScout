@@ -348,6 +348,17 @@ def maybe_jump_with_movement(move_dx, move_dy, cooldown_tracker, force_aim=False
 
     alignment = (move_dx * cursor_dx + move_dy * cursor_dy) / (move_len * cursor_len)
     if alignment >= JUMP_ALIGNMENT_THRESHOLD:
+        # Re-aim onto the jump ring BEFORE tapping space: the stale cursor can
+        # be parked on UI (2026-07-18 it sat on Save & Exit when a stray ESC
+        # had opened the pause menu — space activated the hovered button and
+        # exited the game). The ring (JUMP_AIM_DISTANCE from center) lies
+        # entirely outside the menu button rect (farthest corner ~191px < 240),
+        # so an aimed tap can never press a menu button.
+        try:
+            if not _aim_cursor_toward_vector(move_dx, move_dy):
+                return
+        except Exception:
+            return
         tap_space()
         cooldown_tracker[0] = now
 

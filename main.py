@@ -128,6 +128,7 @@ from input_control import (
 from combat import (
     run_vote_reset_sequence, attempt_respawn, perform_corner_escape_burst,
     pick_zone_from_open_map, wait_for_world_map,
+    undo_esc_if_pause_menu_opened, pause_menu_stack_confirmed,
 )
 from debug_utils import DebugRecorder, FrameCapture
 
@@ -758,6 +759,10 @@ def run(
                     print("[MENU] options menu detected (paused) — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
+                    # Closing Options returns to the pause menu — close that too
+                    # instead of leaving it up for a whole extra loop iteration.
+                    if undo_esc_if_pause_menu_opened(sct, full_mon):
+                        auto_esc_ignore_until = time.time() + 1.0
                     menu_escape_cooldown_until = now_loop + 0.8
                     options_menu_frames = 0
                     continue
@@ -765,6 +770,10 @@ def run(
                     print("[MENU] pause menu detected (paused) — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
+                    # If the detection was a red-zone false positive, that ESC
+                    # OPENED the menu (ESC toggles) — verify and toggle it back.
+                    if undo_esc_if_pause_menu_opened(sct, full_mon):
+                        auto_esc_ignore_until = time.time() + 1.0
                     menu_escape_cooldown_until = now_loop + 0.8
                     pause_menu_frames = 0
                     continue
@@ -777,8 +786,32 @@ def run(
                     print("[MENU] inventory/interface panel detected — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
+                    # 2026-07-18 19:44 incident: this detector false-positived on
+                    # MosArathim sand with no panel open, so the ESC OPENED the
+                    # pause menu; the dim overlay then made HP read 0%, which
+                    # disabled this whole net (_hp_critical gate), and a jump
+                    # space-tap activated the hovered Save & Exit. Verify the ESC
+                    # result and toggle the menu back closed immediately.
+                    if undo_esc_if_pause_menu_opened(sct, full_mon):
+                        auto_esc_ignore_until = time.time() + 1.0
                     menu_escape_cooldown_until = now_loop + 0.8
                     inventory_panel_frames = 0
+                    continue
+
+            elif not vote_reset_in_progress and now_loop >= menu_escape_cooldown_until:
+                # _hp_critical path (the net above is off): HP reads ~0% whenever
+                # the pause menu's dim overlay hides the bar — exactly the state
+                # where a stray-opened menu most needs closing. On 2026-07-18 the
+                # gate kept the menu up until a jump space-tap pressed the hovered
+                # Save & Exit and exited to the lobby. The red-skin detectors
+                # false-positive on the death screen (why the gate exists), but
+                # the clean 4-button stack cannot appear there — trust the stack
+                # alone and close the menu.
+                if pause_menu_stack_confirmed(frame):
+                    print("[MENU] pause menu stack while HP reads critical (dim misread) — ESC")
+                    auto_esc_ignore_until      = time.time() + 1.0
+                    tap_key('esc', hold_time=0.12)
+                    menu_escape_cooldown_until = now_loop + 0.8
                     continue
 
             # ── safe-zone waypoint recovery ───────────────────────────────────

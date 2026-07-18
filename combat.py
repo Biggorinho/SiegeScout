@@ -651,6 +651,40 @@ def _select_vote_reset_row(rows, target_y):
     return None  # no clean stack -> don't guess
 
 
+def pause_menu_stack_confirmed(frame):
+    """True only when the frame shows the clean 4-button pause-menu stack
+    (Resume / Vote Reset / Options / Save & Exit). Unlike the red-skin
+    detector this cannot fire on a death screen, so it is the one signal
+    safe to trust while HP reads critical — the pause menu's dim overlay is
+    itself what hides the HP bar and makes HP read 0%."""
+    if frame is None:
+        return False
+    rows = _find_pause_menu_button_rows(frame)
+    return _select_vote_reset_row(rows, VOTE_RESET_FIXED_CLICK_Y_PX) is not None
+
+
+def undo_esc_if_pause_menu_opened(sct, full_mon, settle=0.6):
+    """Verify an automatic panel-closing ESC didn't OPEN the pause menu.
+
+    ESC toggles the menu: when a panel detector false-positives on plain
+    gameplay (MosArathim sand tripped the gold-legend check on 2026-07-18),
+    the 'closing' ESC opens the pause menu on top of live play. The bot then
+    keeps aiming/jumping — and a space tap on a hovered button activated
+    Save & Exit and exited to the lobby. So after every auto-ESC: look again,
+    and if the pause menu is now up, toggle it straight back closed.
+    (For a real Options close this also handles the pause menu that Options
+    returns to.) Returns True when an undo ESC was sent."""
+    if not sleep_interruptible(settle):
+        return False
+    frame = grab_frame_bgr(sct, full_mon)
+    if is_pause_menu_visible(frame) or len(_find_pause_menu_button_rows(frame)) >= 2:
+        print("[MENU] auto-ESC left the pause menu up (false-positive panel?) — ESC to close")
+        tap_key('esc', hold_time=0.12)
+        sleep_interruptible(0.35)
+        return True
+    return False
+
+
 _DEBUG_DUMP_MAX = 10
 _debug_dump_count = 0
 
