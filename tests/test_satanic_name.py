@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from satanic_name import match_zone_name
+from satanic_name import has_satanic_label, match_zone_name
 
 ZONES = [
     "Outskirts of Inoya", "Fields of Battle", "The Pumpkin Patch",
@@ -90,3 +90,25 @@ def test_below_threshold_similarity_is_rejected():
     # A real zone-shaped string that is not any known zone.
     name, _ = match_zone_name("Volcanic Island", ZONES)
     assert name is None
+
+
+# ── the "Satanic" label, used when the line is not magenta ──────────────────
+
+def test_label_detected_on_the_cream_in_zone_line():
+    # Live 2026-08-24; OCR renders "Satanic" as "Satanio" at this size.
+    assert has_satanic_label("Satanio The Highland Mines")
+    assert has_satanic_label("Satanic The Highland Mines")
+    assert has_satanic_label("☠Satanic The Glacial Trail")
+
+
+def test_label_not_claimed_for_an_ordinary_zone_line():
+    """The line above the satanic one is the zone the player is standing in.
+    Treating it as labelled would target the wrong zone."""
+    for text in ("Dawn's Chapel", "The Highland Mines", "Nightmare",
+                 "Zone Level 210", "Hell (2)", "", None):
+        assert not has_satanic_label(text), text
+
+
+def test_label_not_claimed_for_the_magenta_skull_line():
+    """That variant carries no "Satanic" word - colour is its only signal."""
+    assert not has_satanic_label("☠Prison Dungeon")

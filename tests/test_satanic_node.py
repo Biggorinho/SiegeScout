@@ -60,3 +60,35 @@ def test_the_scan_agrees_with_the_calibrated_coordinate():
     result = combat._find_satanic_node_from_fixed_nodes(_frame())
     ex, ey = config.ZONE_NODES_WORLD[_EXPECTED]
     assert abs(result[0] - ex) <= 4 and abs(result[1] - ey) <= 4
+
+
+# ── scoring every calibrated zone at a given scroll offset ──────────────────
+
+def test_scores_rank_the_satanic_zone_first_at_the_left_edge():
+    ranked = combat.score_zones_in_frame(_frame(), 0)
+    assert ranked, "no zones scored"
+    assert ranked[0][1] == _EXPECTED, f"top was {ranked[0][1]}"
+
+
+def test_the_satanic_zone_wins_by_a_wide_margin():
+    """Ordinary nodes score around 300, so a winner must clear them clearly --
+    otherwise a scan of a view NOT containing the satanic zone would crown a
+    runner-up."""
+    ranked = combat.score_zones_in_frame(_frame(), 0)
+    assert ranked[0][0] - ranked[1][0] > 200
+
+
+def test_offscreen_zones_are_not_scored():
+    """At the left edge the Abyss zones are ~1700px off screen; scoring them
+    would read whatever pixels happen to sit at a clamped coordinate."""
+    names = [n for _s, n, _x, _y in combat.score_zones_in_frame(_frame(), 0)]
+    for z in ("Abyss Realm", "Abyss Jungle", "Shipwreck Cove"):
+        assert z not in names, z
+
+
+def test_offset_shifts_which_zones_are_visible():
+    """Scored at a right-hand offset, the left-hand zones drop out."""
+    ranked = combat.score_zones_in_frame(_frame(), 1440)
+    names = [n for _s, n, _x, _y in ranked]
+    assert "Chilling Lake" not in names
+    assert names, "nothing visible at offset 1440"

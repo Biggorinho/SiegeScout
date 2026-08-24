@@ -195,3 +195,40 @@ def test_plan_is_integral_so_it_can_be_clicked():
     for name in TABLE:
         notches, cx, cy = plan_zone_click(name, TABLE, MAX_SCROLL)
         assert isinstance(notches, int) and isinstance(cx, int) and isinstance(cy, int)
+
+
+# ── scroll stops that cover the whole map ───────────────────────────────────
+from map_scroll import scan_stops  # noqa: E402
+
+
+def test_stops_start_at_the_left_edge():
+    assert scan_stops(MAX_SCROLL, SCREEN_W)[0] == 0
+
+
+def test_stops_end_at_the_right_edge():
+    assert scan_stops(MAX_SCROLL, SCREEN_W)[-1] == int(MAX_SCROLL)
+
+
+def test_stops_cover_every_calibrated_zone():
+    """A zone visible at no stop can never be found by the colour scan --
+    which is exactly the gap when the satanic zone sits off to the right."""
+    import json
+    import os
+    path = os.path.join(os.path.dirname(__file__), "fixtures", "zone_table.json")
+    table = json.load(open(path, encoding="utf-8"))
+    stops = scan_stops(MAX_SCROLL, SCREEN_W)
+    margin = 60
+    for name, (wx, _wy) in table.items():
+        seen = any(margin <= wx - o <= SCREEN_W - margin for o in stops)
+        assert seen, f"{name} at world x={wx} is visible at no stop {stops}"
+
+
+def test_consecutive_stops_overlap():
+    """Without overlap a node could fall in the seam between two views."""
+    stops = scan_stops(MAX_SCROLL, SCREEN_W)
+    for a, b in zip(stops, stops[1:]):
+        assert b - a < SCREEN_W, f"gap between {a} and {b}"
+
+
+def test_a_map_narrower_than_the_screen_needs_one_stop():
+    assert scan_stops(0, SCREEN_W) == [0]

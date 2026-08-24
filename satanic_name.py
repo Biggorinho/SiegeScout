@@ -24,6 +24,24 @@ _PUNCT = re.compile(r"[^a-z0-9 ]")
 _MIN_RATIO = 0.8
 
 
+def has_satanic_label(text):
+    """True when a HUD line carries the "Satanic" label.
+
+    Needed because the satanic line is not always magenta. When a reset lands
+    the player INSIDE the satanic zone the game prints it as the ordinary
+    current-zone line, in cream, prefixed with the word -- and colour then
+    identifies nothing. The word is the only signal in that case, just as
+    colour is the only signal for the magenta skull variant, which carries no
+    word at all.
+
+    Deliberately narrow: it must not claim the plain zone-name line above the
+    satanic one, or the bot would target the zone it is already standing in.
+    """
+    if not text:
+        return False
+    return _LABEL.match(str(text)) is not None
+
+
 def _normalize(text):
     """Casefold, drop the satanic label, drop punctuation, squeeze spaces.
 

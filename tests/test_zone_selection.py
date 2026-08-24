@@ -131,3 +131,53 @@ def test_unnormalized_map_does_not_click_a_guessed_coordinate(monkeypatch):
     plan = plan_zone_click("Abyss Realm", config.ZONE_NODES_WORLD,
                            config.WORLD_MAP_MAX_SCROLL_PX)
     assert all(c[:2] != (plan[1], plan[2]) for c in clicked if len(c) >= 2)
+
+
+# ── sweeping the map for the satanic node ──────────────────────────────────
+
+def _sweep_env(monkeypatch, per_offset):
+    """Drive the sweep with canned scores keyed by scroll offset."""
+    monkeypatch.setattr(combat, "sleep_interruptible", lambda s: True)
+    monkeypatch.setattr(combat, "move_cursor_to", lambda x, y: None)
+    monkeypatch.setattr(combat, "mouse_scroll", lambda n: None)
+    monkeypatch.setattr(combat, "grab_frame_bgr", lambda s, m: FRAME)
+    monkeypatch.setattr(combat, "score_zones_in_frame",
+                        lambda f, off, margin=60: per_offset(off))
+
+
+def test_sweep_finds_a_zone_only_visible_far_right(monkeypatch):
+    """The whole point: a satanic zone the opening view cannot show."""
+    def scores(off):
+        if off > 1500:
+            return [(615.0, "Abyss Realm", 100, 200)]
+        return [(305.0, "Parallel Dimension", 400, 300)]
+    _sweep_env(monkeypatch, scores)
+    name, score = combat.scan_map_for_satanic_zone(None, None)
+    assert name == "Abyss Realm"
+    assert score == 615.0
+
+
+def test_sweep_rejects_when_nothing_stands_out(monkeypatch):
+    """If the satanic node was never in view, the best ordinary node must NOT
+    be crowned — that would reset into a zone at random."""
+    _sweep_env(monkeypatch, lambda off: [(305.0, "Parallel Dimension", 4, 3),
+                                         (290.0, "Flooded Plains", 5, 6)])
+    name, score = combat.scan_map_for_satanic_zone(None, None)
+    assert name is None
+    assert score == 0.0
+
+
+def test_sweep_rejects_a_clear_winner_that_is_still_too_weak(monkeypatch):
+    """A big margin over nothing is not evidence of a satanic glow."""
+    _sweep_env(monkeypatch, lambda off: [(120.0, "Dry Hills", 4, 3),
+                                         (-90.0, "Abyss Realm", 5, 6)])
+    assert combat.scan_map_for_satanic_zone(None, None)[0] is None
+
+
+def test_sweep_visits_more_than_one_offset(monkeypatch):
+    seen = []
+    _sweep_env(monkeypatch, lambda off: seen.append(off) or [])
+    combat.scan_map_for_satanic_zone(None, None)
+    assert len(seen) >= 2, f"only swept {seen}"
+    assert seen[0] == 0
+    assert max(seen) >= config.WORLD_MAP_MAX_SCROLL_PX - config.SCREEN_W

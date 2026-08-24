@@ -82,6 +82,26 @@ def test_does_not_return_the_zone_the_player_is_standing_in():
     assert name != "Dawn's Chapel"
 
 
+@needs_ocr
+def test_reads_the_cream_satanic_line_when_standing_in_that_zone():
+    """The satanic line is NOT always magenta.
+
+    Captured live 2026-08-24: after a reset lands the player INSIDE the
+    satanic zone, the HUD shows it as the ordinary current-zone line -- cream,
+    hue 20-29 -- prefixed with the word "Satanic":
+
+        Satanic The Highland Mines
+        Nightmare
+        Zone Level 210
+
+    Requiring magenta rejected every line here, so the reader returned None on
+    every reset of that session and the bot fell back to the colour scan. The
+    word "Satanic" is the signal colour cannot provide."""
+    name, ratio, raw = hud_ocr.read_satanic_zone(
+        _fixture("hud_satanic_cream_in_zone.png"), ZONES)
+    assert name == "The Highland Mines", f"raw={raw!r}"
+
+
 def test_frame_without_magenta_returns_none():
     black = np.zeros((1080, 1920, 3), dtype=np.uint8)
     name, ratio, _ = hud_ocr.read_satanic_zone(black, ZONES)

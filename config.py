@@ -406,6 +406,15 @@ MAP_OCR_ENABLED              = True
 MAP_NORMALIZE_CHUNK_NOTCHES  = 8
 MAP_NORMALIZE_MAX_STEPS      = 80
 MAP_SCROLL_SETTLE_SECONDS    = 0.30
+# Sweeping the whole scroll axis for the satanic node, used when its name
+# could not be read. Measured on a real capture: the active satanic node
+# scores ~615 while ordinary nodes top out around 305, and the sepia region
+# scores NEGATIVE (its nodes are blue, which the scoring penalises). So a
+# winner must both clear the ordinary crowd outright and beat the runner-up
+# clearly -- otherwise a sweep that never saw the satanic zone would crown
+# the best ordinary node it did see.
+SATANIC_SCAN_MIN_SCORE       = 400.0
+SATANIC_SCAN_MIN_MARGIN      = 150.0
 
 FALLBACK_NODE_X_FRAC = 0.36
 FALLBACK_NODE_Y_FRAC = 0.435

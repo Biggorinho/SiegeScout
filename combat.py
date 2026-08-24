@@ -26,6 +26,7 @@ from config import (
     ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX, WORLD_MAP_PX_PER_NOTCH,
     MAP_OCR_ENABLED, MAP_NORMALIZE_CHUNK_NOTCHES, MAP_NORMALIZE_MAX_STEPS,
     MAP_SCROLL_SETTLE_SECONDS,
+    SATANIC_SCAN_MIN_SCORE, SATANIC_SCAN_MIN_MARGIN,
 )
 from detectors import (
     grab_frame_bgr, is_world_map_visible, is_death_screen,
@@ -39,7 +40,7 @@ from input_control import (
 )
 
 import hud_ocr
-from map_scroll import plan_zone_click, scroll_to_edge
+from map_scroll import plan_zone_click, scan_stops, scroll_to_edge
 
 
 def wait_for_world_map(sct, full_mon, retry_interact_key=None, timeout_seconds=None):
@@ -375,6 +376,86 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
     x, y, name = best
     print(f"[SAT] fixed-node picked {name} at ({x},{y}) score={best_score:.1f} core_hot={best_core_hot:.2f} margin={best_score-second_score:.1f}")
     return x, y
+
+
+def score_zones_in_frame(frame_bgr, offset_px, margin=60):
+    """Score every calibrated zone visible at this scroll offset.
+
+    Returns ``[(score, name, screen_x, screen_y)]``, best first. Only zones
+    actually on screen are scored -- a clamped off-screen coordinate would
+    just read whatever pixels happen to sit at the screen edge.
+
+    Ordinary nodes score around 300 and the active satanic node around 615,
+    so callers comparing across several scroll positions should require a
+    clear margin rather than trusting a per-view maximum.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return []
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    h, w = frame_bgr.shape[:2]
+    ranked = []
+    for name, (wx, wy) in ZONE_NODES_WORLD.items():
+        sx = int(round(wx - offset_px))
+        sy = int(round(wy))
+        if not (margin <= sx <= w - margin) or not (0 <= sy < h):
+            continue
+        scored = _score_satanic_fixed_node(hsv, sx, sy)
+        if scored is None:
+            continue
+        ranked.append((scored[0], name, sx, sy))
+    ranked.sort(key=lambda r: r[0], reverse=True)
+    return ranked
+
+
+def scan_map_for_satanic_zone(sct, full_mon):
+    """Sweep the whole scroll axis looking for the glowing satanic node.
+
+    The map must already be at its left edge. Returns ``(name, score)``, or
+    ``(None, 0.0)`` when nothing convincing was found.
+
+    This exists because the satanic zone can sit in the right-hand region,
+    which the old scan could never see: it only ever looked at the opening
+    view. Scoring is only meaningful for zones actually on screen, so the
+    sweep visits overlapping stops that together cover the map.
+
+    Leaves the map scrolled wherever the sweep ended -- callers must
+    re-normalize before using any world coordinate.
+    """
+    # Best score PER ZONE. Stops overlap by design, so most zones are seen
+    # several times; ranking raw observations would let a zone be its own
+    # runner-up and fail the margin check against itself.
+    best_by_zone = {}
+    current = 0.0
+    for target in scan_stops(WORLD_MAP_MAX_SCROLL_PX, SCREEN_W):
+        delta = target - current
+        notches = int(round(delta / WORLD_MAP_PX_PER_NOTCH))
+        if notches > 0:
+            move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
+            mouse_scroll(-notches)
+            if not sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS):
+                return None, 0.0
+            # The map clamps, so the achieved offset is not always the target.
+            current = min(current + notches * WORLD_MAP_PX_PER_NOTCH,
+                          float(WORLD_MAP_MAX_SCROLL_PX))
+        for score, name, _sx, _sy in score_zones_in_frame(
+                grab_frame_bgr(sct, full_mon), current):
+            if score > best_by_zone.get(name, float("-inf")):
+                best_by_zone[name] = score
+
+    if not best_by_zone:
+        return None, 0.0
+    ranked = sorted(best_by_zone.items(), key=lambda kv: kv[1], reverse=True)
+    best_name, best_score = ranked[0]
+    runner_up = ranked[1][1] if len(ranked) > 1 else float("-inf")
+    if best_score < SATANIC_SCAN_MIN_SCORE:
+        return None, 0.0
+    if (best_score - runner_up) < SATANIC_SCAN_MIN_MARGIN:
+        # Nothing stood out: most likely the satanic node was never in view,
+        # and this is just the strongest ordinary node.
+        print(f"[SAT] sweep inconclusive: '{best_name}' {best_score:.0f} vs "
+              f"runner-up {runner_up:.0f}")
+        return None, 0.0
+    return best_name, best_score
 
 
 def _find_satanic_node(frame_bgr):
@@ -1088,6 +1169,16 @@ def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None,
     # the HUD gives us the latter by name. Coordinates are world-space, so the
     # zone may be off screen at the left edge and has to be scrolled into view.
     wanted = target_zone or satanic_hint
+    if wanted is None and normalized is not None:
+        # No name from the HUD: sweep the map for the glowing node. This is
+        # what lets a satanic zone in the right-hand region be found at all.
+        wanted, _sweep_score = scan_map_for_satanic_zone(sct, full_mon)
+        if wanted is not None:
+            print(f"[SAT] sweep picked '{wanted}' (score {_sweep_score:.0f})")
+        # The sweep scrolled away from the origin; world coordinates need it.
+        normalized = _reopen_world_map_for_recenter(sct, full_mon)
+        scan_frame = normalized if normalized is not None else scan_frame
+
     if wanted is not None and normalized is not None:
         plan = plan_zone_click(
             wanted, ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX,

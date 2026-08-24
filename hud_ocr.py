@@ -122,8 +122,12 @@ def read_satanic_zone(frame, candidates, ocr=None, min_magenta=_MIN_MAGENTA):
             box, text = entry[0], entry[1]
         except (TypeError, IndexError):
             continue
-        if _magenta_fraction(hsv, box) < min_magenta:
-            continue          # cream/green HUD lines, or map labels
+        # Two independent signals, because neither covers every HUD variant:
+        # the magenta skull line carries no "Satanic" word, and the cream
+        # in-zone line carries no magenta. Requiring both would reject both.
+        if not (_magenta_fraction(hsv, box) >= min_magenta
+                or satanic_name.has_satanic_label(text)):
+            continue          # difficulty/zone-level lines, or map labels
         name, ratio = satanic_name.match_zone_name(text, candidates)
         if name is not None and ratio > best[1]:
             best = (name, ratio, text)

@@ -123,3 +123,25 @@ def plan_zone_click(zone_name, zone_table, max_scroll_px, screen_w=1920,
     notches, screen_x = scroll_plan(world_x, max_scroll_px, screen_w,
                                     px_per_notch)
     return notches, int(round(screen_x)), int(round(world_y + click_y_bias))
+
+
+def scan_stops(max_scroll_px, screen_w=1920, margin=60):
+    """Scroll offsets that together show every part of the map, with overlap.
+
+    The colour scan can only score nodes that are actually on screen, so a
+    scan that never leaves the left edge cannot find a satanic zone sitting in
+    the right-hand region -- it is simply not in frame. These stops walk the
+    whole axis instead.
+
+    Consecutive stops advance by less than a screen width so no node falls in
+    a seam, and `margin` keeps nodes away from the screen edges where they are
+    clipped and score badly.
+    """
+    max_scroll_px = max(0.0, float(max_scroll_px))
+    if max_scroll_px <= 0:
+        return [0]
+    step = max(1, screen_w - 2 * margin)
+    stops = list(range(0, int(max_scroll_px), step))
+    if stops[-1] != int(max_scroll_px):
+        stops.append(int(max_scroll_px))
+    return stops
