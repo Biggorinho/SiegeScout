@@ -48,3 +48,6 @@ loot_frames/
 runs/
 # Auto-downloaded YOLO base weights (re-fetched on demand by the trainers)
 yolo11n.pt
+
+# World-map calibration captures (large, regenerable via tools/calibrate_map.py)
+calibration/
