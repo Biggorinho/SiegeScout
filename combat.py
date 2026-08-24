@@ -797,8 +797,12 @@ def _dump_debug_frame(frame, prefix):
         if cv2.imwrite(path, frame):
             _debug_dump_count += 1
             print(f"[RST] saved debug frame -> {path}")
-    except Exception:
-        pass
+        else:
+            # Silence here means diagnosing from dumps that were never written.
+            # Note the exe resolves this relative to ITS cwd, i.e. dist/debug/.
+            print(f"[RST] debug frame NOT saved (imwrite refused) -> {path}")
+    except Exception as exc:
+        print(f"[RST] debug frame NOT saved ({type(exc).__name__}: {exc})")
 
 
 def _vote_reset_row_is_active(frame, click_y):
