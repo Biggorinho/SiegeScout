@@ -317,6 +317,13 @@ MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-m
 # run held one ore for 7.7s at 0.6px camera shift. Long enough to let a jump
 # land and take effect, short enough not to burn a farming cycle.
 RT_STATIC_GIVEUP_SECONDS                = 2.0
+
+# How long an ATTACK-state stuck escape (the perpendicular slide) is held before
+# the chase may steer again. The stuck block does not continue, so the chase
+# would otherwise overwrite a 0.18s escape with a 0.95-1.45s move back into the
+# obstruction in the same iteration. Must exceed the chase move duration or the
+# escape is pointless; kept just above it so combat still feels responsive.
+ATTACK_ESCAPE_COMMIT_SECONDS            = 1.5
 # Once standing on/near a minimap-targeted resource, items and ore are both
 # collected by pressing F; ore needs a second F this many seconds later to mine.
 RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS  = 0.5

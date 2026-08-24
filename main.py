@@ -63,6 +63,7 @@ from config import (
     ENABLE_MINIMAP_RESOURCE_TARGETING,
     MINIMAP_RESOURCE_PICKUP_DIST_PX,
     RT_STATIC_GIVEUP_SECONDS,
+    ATTACK_ESCAPE_COMMIT_SECONDS,
     MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
     MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
@@ -361,6 +362,8 @@ def run(
     last_rt_stuck_log_t          = 0.0
     rt_stuck_since               = 0.0
     loot_click_stuck_since       = 0.0
+    attack_escape_until          = 0.0
+    attack_escape_delta          = None
     explore_exit                 = "init"
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
@@ -458,6 +461,7 @@ def run(
         nonlocal kite_committed_until, kite_cached_move, last_attack_move_plan_t
         nonlocal zone_opening_rightclick_pending, attack_held
         nonlocal attack_stuck_active, attack_stuck_jump_pref, attack_stuck_jump_seq_idx
+        nonlocal attack_escape_until, attack_escape_delta
 
         state                          = State.ATTACK
         state_start                    = now_loop
@@ -475,6 +479,9 @@ def run(
         attack_stuck_active            = False
         attack_stuck_jump_pref[0]      = False
         attack_stuck_jump_seq_idx[0]   = 0
+        # A commitment from a previous engagement must not steer this one.
+        attack_escape_until            = 0.0
+        attack_escape_delta            = None
         if attack_held:
             attack_key_up()
             attack_held = False
@@ -1881,6 +1888,15 @@ def run(
                         slide_dx, slide_dy = perp_dx, perp_dy
                     wasd_move_and_attack(slide_dx, slide_dy, duration=0.18,
                                          aim_dx=adx, aim_dy=ady)
+                    # Commit to the slide. This block does NOT continue, so
+                    # without a commitment the chase below immediately issues
+                    # its own 0.95-1.45s move straight back into whatever we are
+                    # stuck on — the escape gets 0.18s, the wall-walk gets ~1.2s,
+                    # and the bot never frees itself. A live run showed
+                    # `dist=98px -> -2° cmd=388px` repeating with the world dead
+                    # static and only the 4-5s CHASE TIMEOUT interrupting it.
+                    attack_escape_delta = (slide_dx, slide_dy)
+                    attack_escape_until = now_loop + ATTACK_ESCAPE_COMMIT_SECONDS
                 elif confirmed_enemy_now:
                     hard_stuck_since       = 0.0
                     corner_escape_attempts = 0
@@ -1978,7 +1994,11 @@ def run(
                     )
                     # Override linear approach with A* when enemy is far — navigates around walls
                     _chase_thresh = MELEE_CHASE_MINIMAP_DIST if _melee_mode else ATTACK_CHASE_MINIMAP_DIST
-                    if confirmed_enemy_now and nearest and enemy_dist > _chase_thresh:
+                    if now_loop < attack_escape_until and attack_escape_delta is not None:
+                        # Escaping takes priority over closing distance; the
+                        # chase is what put us against the wall.
+                        attack_move_dx, attack_move_dy = attack_escape_delta
+                    elif confirmed_enemy_now and nearest and enemy_dist > _chase_thresh:
                         chase_dx, chase_dy = enemy_chaser.get_chase_delta(
                             minimap, center, nearest, cached_mask)
                         attack_move_dx, attack_move_dy = chase_dx, chase_dy
