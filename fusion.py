@@ -51,3 +51,41 @@ def fuse_enemy_dots(heuristic_dots, ml_enemy_dets, merge_dist=6.0,
             continue  # already covered by a heuristic (or accepted ML) dot
         fused.append([round(x), round(y), default_tier, "ml"])
     return fused
+
+
+# The model splits ore by vein colour; downstream only cares that it is ore.
+_ORE_CLASSES = ("oreGold", "oreGreen", "oreRuby")
+# Tier used by detectors.classify_ore_dots for its own ore dots.
+_ORE_TIER = 3
+
+
+def ml_ore_dots(ml_dets, min_conf=0.40, merge_dist=4.0, tier=_ORE_TIER,
+                kind="ml"):
+    """Ore dots from the minimap model, shaped like classify_ore_dots output.
+
+    Unlike `fuse_enemy_dots` this REPLACES the heuristic rather than adding to
+    it, because the two classes fail in opposite directions. Enemies were a
+    recall problem, so adding was strictly safer. Ore is a precision problem:
+    on the 102-frame benchmark the heuristic scores P 0.28 / R 0.32 with 81
+    false positives, against the model's P 0.93 / R 0.90 with 7. Adding the
+    model's dots to the heuristic's would keep all 81 -- making the very
+    symptom worse. The model wins on both axes, so it stands alone.
+
+    Returns ``[x, y, tier, kind]`` entries with integer coordinates, matching
+    the heuristic's shape so callers need no special handling.
+    """
+    if not ml_dets:
+        return []
+    dots = []
+    md2 = merge_dist * merge_dist
+    for cls in _ORE_CLASSES:
+        for det in ml_dets.get(cls) or ():
+            if det.get("confidence", 0.0) < min_conf:
+                continue
+            x, y = det["x"], det["y"]
+            # One vein can trip two colour classes at once; keep it one dot,
+            # or the bot mines the same spot twice.
+            if any((x - d[0]) ** 2 + (y - d[1]) ** 2 <= md2 for d in dots):
+                continue
+            dots.append([round(x), round(y), tier, kind])
+    return dots

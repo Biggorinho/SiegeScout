@@ -993,6 +993,7 @@ def run(
 
             # ── enemy detection ───────────────────────────────────────────────
             enemy_dots = classify_enemy_dots(minimap)
+            _ml_dets = {}          # reused by the resource scan further down
             if minimap_ml is not None:
                 # Fuse in enemies the heuristic missed (recall 0.36 -> 0.74 on
                 # the eval set). Additive only: never removes a heuristic dot.
@@ -1309,7 +1310,17 @@ def run(
                     qte_active = detect_mining_qte_window(frame).get("active", False)
                     if not qte_active:
                         raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
-                        raw_ore_dots  = classify_ore_dots(minimap)  if _enable_mining     else []
+                        if not _enable_mining:
+                            raw_ore_dots = []
+                        elif _ml_dets:
+                            # ML ore REPLACES the heuristic rather than adding
+                            # to it: on the eval benchmark the heuristic scores
+                            # P 0.28 / R 0.32 with 81 false positives against
+                            # the model's P 0.93 / R 0.90 with 7. Reuses this
+                            # frame's detections — no second inference pass.
+                            raw_ore_dots = fusion.ml_ore_dots(_ml_dets)
+                        else:
+                            raw_ore_dots = classify_ore_dots(minimap)
                         if raw_ore_dots:
                             last_minimap_ore_t = now_loop
                         # Capture a full frame for on-screen resource labeling
