@@ -360,6 +360,7 @@ def run(
     last_motion_stuck_log_t      = 0.0
     last_rt_stuck_log_t          = 0.0
     rt_stuck_since               = 0.0
+    explore_exit                 = "init"
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
     last_minimap_ore_t           = -1e9
@@ -911,7 +912,9 @@ def run(
             screen_motion.update(frame)
             if _cfg.ENABLE_SCREEN_MOTION_LOG and (now_loop - last_motion_log_t) >= _cfg.SCREEN_MOTION_LOG_INTERVAL:
                 _shift = screen_motion.recent_shift()
-                print(f"[MOTION] shift={_shift:.2f}px {'static' if screen_motion.is_static() else 'moving'} (state={state.name})")
+                print(f"[MOTION] shift={_shift:.2f}px "
+                      f"{'static' if screen_motion.is_static() else 'moving'} "
+                      f"(state={state.name} exit={explore_exit})")
                 last_motion_log_t = now_loop
 
             if hp is not None:
@@ -1292,12 +1295,21 @@ def run(
 
             # ── STATE: EXPLORE ────────────────────────────────────────────────
             if state == State.EXPLORE:
+                # Which branch this iteration exits through. Stays "move" only
+                # when control reaches the actual explore movement at the bottom;
+                # every early continue overwrites it. Printed by the [MOTION]
+                # line so a stall says WHICH branch is eating the time instead of
+                # leaving it to be guessed — five hypotheses have already died
+                # here (mining latch, post-kill pause, calibration, resource
+                # approach, A* failure).
+                explore_exit = "move"
                 if attack_held:
                     attack_key_up()
                     attack_held = False
 
                 if time.time() < explore_pause_until:
                     sleep_interruptible(0.05)
+                    explore_exit = "explore_pause"
                     continue
 
                 # Prioritize exploration/combat acquisition right after zone start.
@@ -1424,11 +1436,13 @@ def run(
                                         resource_targeter.mark_attempted(now_loop)
                                         rt_stuck_since = 0.0
                                         sleep_interruptible(0.03)
+                                        explore_exit = "rt_giveup"
                                         continue
                                 else:
                                     rt_stuck_since = 0.0
                                 wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
                                 sleep_interruptible(0.03)
+                                explore_exit = "rt_approach"
                                 continue
                         elif rt_target is not None and rt_target.kind == "ore":
                             # Mining: stand next to the ore, press F, wait ~0.5s, press F.
@@ -1440,6 +1454,7 @@ def run(
                             sleep_interruptible(RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS)
                             tap_key('f', hold_time=0.04)
                             sleep_interruptible(0.05)
+                            explore_exit = "ore_adjacent_F"
                             continue
                         elif rt_target is not None:
                             # Item: LOOT by clicking its coloured name/tier label — the
@@ -1460,6 +1475,7 @@ def run(
                                         break  # label gone = picked up
                                     sleep_interruptible(0.15)
                                 resource_targeter.mark_attempted(now_loop)
+                                explore_exit = "item_label_click"
                                 continue
                             # No label on-screen yet — nudge toward the dot to bring it in view.
                             if (now_loop - last_item_nudge_log_t) >= 1.0:
@@ -1469,6 +1485,7 @@ def run(
                             if abs(idx) + abs(idy) > 6:
                                 wasd_move(idx, idy, 0.08)
                             sleep_interruptible(0.05)
+                            explore_exit = "item_nudge"
                             continue
                         # Target None — fall through to the on-screen handlers below.
 
@@ -1499,6 +1516,7 @@ def run(
                             last_mining_qte_press_t = now_loop
                             last_qte_in_window_press_t = now_loop
                         sleep_interruptible(0.03)
+                        explore_exit = "mining_qte"
                         continue
 
                     # Gate the loose on-screen scan on recent MINIMAP ore
@@ -1565,6 +1583,7 @@ def run(
                                 mining_target_screen = None
                                 mining_active_until = 0.0
                                 sleep_interruptible(0.03)
+                                explore_exit = "mine_static_drop"
                                 continue
                             wasd_move(mdx, mdy, random.uniform(
                                 MINING_APPROACH_MOVE_MIN_SECONDS,
@@ -1578,6 +1597,7 @@ def run(
                             last_mining_interact_t = now_loop
 
                         sleep_interruptible(0.04)
+                        explore_exit = "mine_approach"
                         continue
 
                     mining_target_screen = None
@@ -1605,6 +1625,7 @@ def run(
                                 tap_key('f', hold_time=0.04)
                                 last_loot_items_click_t = now_loop
                             sleep_interruptible(0.03)
+                            explore_exit = "loot_item_click"
                             continue
 
                 pt = ctypes.wintypes.POINT()
