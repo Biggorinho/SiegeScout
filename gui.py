@@ -9,6 +9,7 @@ counter will stay at 0 (everything else works).
 
 import io
 import inspect
+import json
 import os
 import queue
 import sys
@@ -21,6 +22,7 @@ from PIL import Image, ImageTk
 
 import config
 import license as _lic
+import stats_tracker as _stats
 
 
 # ── palette (SiegeScout) ─────────────────────────────────────────────────────
@@ -38,6 +40,7 @@ PEACH = "#c87d3a"
 LOG_BG = "#111311"
 
 LOGO_FILE = os.path.join("assets", "logo.png")
+_SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
 
 
 def _asset(name: str) -> str:
@@ -207,6 +210,12 @@ class Switch(tk.Canvas):
     def get(self):
         return self._on
 
+    def set(self, value: bool):
+        if self._disabled:
+            return
+        self._on = bool(value)
+        self._redraw()
+
 
 class BotUI(tk.Tk):
     def __init__(self):
@@ -232,6 +241,21 @@ class BotUI(tk.Tk):
         self._cta_container        = None   # tk.Frame | None
         self._runtime_sec = 0
         self._runtime_job = None
+        self._tracker = _stats.init_tracker(
+            on_zone_entered=self._on_zone_entered_packet,
+            on_char_updated=self._on_char_updated_packet,
+            on_item_dropped=self._on_item_dropped_packet,
+            on_enemy_killed=self._on_kill_packet,
+        )
+        self._stats_job: str | None = None
+        self._char_lbl: tk.Label | None = None
+        self._zone_lbl: tk.Label | None = None
+        self._buffs_lbl: tk.Label | None = None
+        self._items_lbl: tk.Label | None = None
+        self._kills_lbl: tk.Label | None = None
+        self._gold_earned_lbl: tk.Label | None = None
+        self._gold_hr_lbl: tk.Label | None = None
+        self._gold_src_lbl: tk.Label | None = None
 
         self.f_ui = tkfont.Font(family="Segoe UI", size=10)
         self.f_ui_bold = tkfont.Font(family="Segoe UI", size=10, weight="bold")
@@ -243,10 +267,11 @@ class BotUI(tk.Tk):
         self.f_cap = tkfont.Font(family="Consolas", size=8, weight="bold")
 
         self._build_ui()
+        self._load_settings()
         self.report_callback_exception = self._on_tk_exception
         self.after(80, self._poll_log)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.geometry("460x870")
+        self.geometry("560x980")
         self.after(50, self._init_license)
 
     def _build_ui(self):
@@ -315,6 +340,72 @@ class BotUI(tk.Tk):
         self._reset_lbl.pack(anchor=tk.W, pady=(2, 0))
         tk.Label(reset_card, text="session", bg=SURFACE, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
 
+        # ── session stats card ────────────────────────────────────────────────
+        stats_card = tk.Frame(root, bg=SURFACE, padx=14, pady=10,
+                              highlightbackground=BORDER, highlightthickness=1)
+        stats_card.pack(fill=tk.X, pady=(10, 0))
+
+        char_row = tk.Frame(stats_card, bg=SURFACE)
+        char_row.pack(fill=tk.X)
+        tk.Label(char_row, text="CHAR", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
+        self._char_lbl = tk.Label(char_row, text="—", bg=SURFACE, fg=FG, font=self.f_ui)
+        self._char_lbl.pack(side=tk.LEFT, padx=(8, 0))
+
+        zone_row = tk.Frame(stats_card, bg=SURFACE)
+        zone_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(zone_row, text="ZONE", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
+        self._zone_lbl = tk.Label(zone_row, text="—", bg=SURFACE, fg=BLUE, font=self.f_ui)
+        self._zone_lbl.pack(side=tk.LEFT, padx=(8, 0))
+
+        buffs_row = tk.Frame(stats_card, bg=SURFACE)
+        buffs_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Label(buffs_row, text="BUFFS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
+        self._buffs_lbl = tk.Label(buffs_row, text="—", bg=SURFACE, fg=MAUVE, font=self.f_ui)
+        self._buffs_lbl.pack(side=tk.LEFT, padx=(8, 0))
+
+        tk.Frame(stats_card, bg=BORDER, height=1).pack(fill=tk.X, pady=(6, 0))
+
+        # ── 2×2 stat grid: KILLS | ITEMS  /  GOLD | RATE ─────────────────────
+        def _stat_cell(parent, label, color):
+            cell = tk.Frame(parent, bg=SURFACE)
+            cell.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(cell, text=label, bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
+            val = tk.Label(cell, text="—", bg=SURFACE, fg=color, font=self.f_ui)
+            val.pack(side=tk.LEFT, padx=(8, 0))
+            return val
+
+        row_a = tk.Frame(stats_card, bg=SURFACE)
+        row_a.pack(fill=tk.X, pady=(6, 0))
+        self._kills_lbl = _stat_cell(row_a, "EXP", GREEN)
+        self._items_lbl = _stat_cell(row_a, "ITEMS", FG)
+
+        row_b = tk.Frame(stats_card, bg=SURFACE)
+        row_b.pack(fill=tk.X, pady=(4, 0))
+        self._gold_earned_lbl = _stat_cell(row_b, "GOLD", YELLOW)
+        self._gold_hr_lbl     = _stat_cell(row_b, "RATE", FG_MUTE)
+
+        self._gold_src_lbl = tk.Label(stats_card, text="", bg=SURFACE, fg=FG_MUTE,
+                                      font=("Consolas", 7))
+        self._gold_src_lbl.pack(anchor=tk.W, pady=(2, 0))
+
+        # ── Npcap notice (shown only when packet sniffing is unavailable) ─────
+        if not self._tracker.available:
+            npcap_frame = tk.Frame(root, bg="#2a1a0a", padx=12, pady=8,
+                                   highlightbackground="#6b3d10", highlightthickness=1)
+            npcap_frame.pack(fill=tk.X, pady=(10, 0))
+            tk.Label(npcap_frame, text="Npcap not detected — live stats unavailable",
+                     bg="#2a1a0a", fg=PEACH, font=("Consolas", 8, "bold")).pack(anchor=tk.W)
+            tk.Label(npcap_frame,
+                     text="Install Npcap for zone buffs, kills & item tracking:",
+                     bg="#2a1a0a", fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W, pady=(2, 0))
+            link = tk.Label(npcap_frame, text="  npcap.com  →  Download",
+                            bg="#2a1a0a", fg=BLUE, font=("Consolas", 8, "underline"), cursor="hand2")
+            link.pack(anchor=tk.W)
+            link.bind("<Button-1>", lambda _e: __import__("webbrowser").open("https://npcap.com/#download"))
+            tk.Label(npcap_frame,
+                     text="After install: restart SiegeScout as Administrator",
+                     bg="#2a1a0a", fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W, pady=(2, 0))
+
         opt = tk.Frame(root, bg=SURFACE, padx=14, pady=12, highlightbackground=BORDER, highlightthickness=1)
         opt.pack(fill=tk.X, pady=(14, 0))
         tk.Label(opt, text="OPTIONS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W, pady=(0, 8))
@@ -331,8 +422,9 @@ class BotUI(tk.Tk):
             return sw
 
         self._death_sw = _row(opt, "Enable Death Handling", getattr(config, "ENABLE_DEATH_HANDLING", True))
-        self._mining_sw = _row(opt, "Enable Mining", False, enabled=False, soon=True)
-        self._loot_sw = _row(opt, "Enable Loot Items", False, enabled=False, soon=True)
+        self._melee_sw = _row(opt, "Melee Mode  (advances into enemies, no kiting)", getattr(config, "MELEE_MODE", False))
+        self._mining_sw = _row(opt, "Enable Mining", getattr(config, "ENABLE_MINING", False))
+        self._loot_sw = _row(opt, "Enable Loot Items", getattr(config, "ENABLE_LOOT_ITEMS", False))
         self._debug_sw = _row(opt, "Debug Snapshots", getattr(config, "ENABLE_DEBUG_SNAPSHOTS", False))
 
         tk.Frame(opt, bg=BORDER, height=1).pack(fill=tk.X, pady=(8, 4))
@@ -512,6 +604,47 @@ class BotUI(tk.Tk):
         else:
             self._start_bot()
 
+    def _save_settings(self):
+        try:
+            data = {
+                "zone":     self._zone_var.get(),
+                "death_sw": self._death_sw.get(),
+                "melee_sw": self._melee_sw.get(),
+                "rc_sw":    self._rc_sw.get(),
+                "rc_cd":    self._rc_cd.get(),
+                "k3_sw":    self._k3_sw.get(),
+                "k3_cd":    self._k3_cd.get(),
+                "mv_sw":    self._mv_sw.get(),
+                "mv_cd":    self._mv_cd.get(),
+            }
+            with open(_SETTINGS_FILE, "w") as f:
+                json.dump(data, f, indent=2)
+        except Exception:
+            pass
+
+    def _load_settings(self):
+        try:
+            with open(_SETTINGS_FILE) as f:
+                data = json.load(f)
+            valid_zones = {"Satanic (auto)"} | set(config.SATANIC_FIXED_NODES.keys())
+            if data.get("zone") in valid_zones:
+                self._zone_var.set(data["zone"])
+            for sw_attr, key in (
+                ("_death_sw", "death_sw"), ("_melee_sw", "melee_sw"),
+                ("_rc_sw", "rc_sw"), ("_k3_sw", "k3_sw"), ("_mv_sw", "mv_sw"),
+            ):
+                sw = getattr(self, sw_attr, None)
+                if sw is not None and key in data:
+                    sw.set(bool(data[key]))
+            for var_attr, key in (
+                ("_rc_cd", "rc_cd"), ("_k3_cd", "k3_cd"), ("_mv_cd", "mv_cd"),
+            ):
+                var = getattr(self, var_attr, None)
+                if var is not None and key in data:
+                    var.set(str(data[key]))
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
+            pass
+
     def _start_bot(self):
         if not self._license_valid:
             self._push_log("No valid license — activate first", "err")
@@ -554,6 +687,7 @@ class BotUI(tk.Tk):
             "key3_cooldown":             _cd(self._k3_cd, 50.0),
             "enable_movement_ability":   self._mv_sw.get(),
             "movement_ability_cooldown": _cd(self._mv_cd, 3.0),
+            "melee_mode":                self._melee_sw.get(),
         }
         try:
             sig = inspect.signature(_main.run)
@@ -562,6 +696,7 @@ class BotUI(tk.Tk):
         except Exception:
             pass
 
+        self._save_settings()
         self._bot_thread = threading.Thread(target=_main.run, kwargs=kwargs, daemon=True)
         self._bot_thread.start()
 
@@ -570,6 +705,7 @@ class BotUI(tk.Tk):
         self._pulse.set(alive=True, color=GREEN)
         self._push_log("Bot started — mode: explore", "info")
         self._start_runtime()
+        self._start_stats()
         self.after(500, self._watch_thread)
 
     def _stop_bot(self):
@@ -605,6 +741,7 @@ class BotUI(tk.Tk):
         self._pulse.set(alive=False, color=FG_MUTE)
         self._push_log("Bot stopped", "err")
         self._stop_runtime()
+        self._tracker.stop()
 
     def _on_vote_reset(self):
         self.after(0, self._bump_reset)
@@ -630,6 +767,114 @@ class BotUI(tk.Tk):
         self._runtime_lbl.config(text=f"runtime · {h:02d}:{m:02d}:{s:02d}")
         self._runtime_sec += 1
         self._runtime_job = self.after(1000, self._tick_runtime)
+
+    # ── session stats ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fmt_gold(n: int) -> str:
+        if n >= 1_000_000:
+            return f"+{n / 1_000_000:.2f}M"
+        if n >= 1_000:
+            return f"+{n:,}"
+        return f"+{n}"
+
+    def _on_zone_entered_packet(self, zone_name: str, buff_names: list):
+        self.after(0, self._on_zone_entered_main, zone_name, buff_names)
+
+    def _on_zone_entered_main(self, zone_name: str, buff_names: list):
+        if self._zone_lbl:
+            self._zone_lbl.config(text=zone_name)
+        if self._buffs_lbl:
+            self._buffs_lbl.config(text=" · ".join(buff_names) if buff_names else "—")
+        if self._items_lbl:
+            self._items_lbl.config(text="—")
+        self._push_log(f"Zone entered: {zone_name}", "info")
+        if buff_names:
+            self._push_log(f"Buffs: {', '.join(buff_names)}", "info")
+
+    def _on_char_updated_packet(self, char: dict):
+        self.after(0, self._on_char_updated_main, char)
+
+    def _on_char_updated_main(self, char: dict):
+        if self._char_lbl:
+            lv = f"Lv{char['level']}"
+            if char.get("herolevel", 0) > 0:
+                lv += f" HL{char['herolevel']}"
+            self._char_lbl.config(text=f"{char['name']}  ·  {char['class_name']}  ·  {lv}")
+
+    def _on_item_dropped_packet(self, _rarity: int):
+        self.after(0, self._on_item_dropped_main)
+
+    def _on_item_dropped_main(self):
+        if not self._items_lbl:
+            return
+        items = self._tracker.items_by_rarity
+        if not items:
+            self._items_lbl.config(text="—")
+            return
+        _rarity_short = {1: "M", 2: "R", 3: "H", 4: "A"}
+        parts = [
+            f"{items[r]}{_rarity_short[r]}"
+            for r in sorted(items.keys(), reverse=True)
+            if r > 0 and r in _rarity_short
+        ]
+        self._items_lbl.config(text=" ".join(parts) if parts else "—")
+
+    def _on_kill_packet(self, _exp_delta: int):
+        self.after(0, self._on_kill_main)
+
+    def _on_kill_main(self):
+        if not self._kills_lbl:
+            return
+        exp = self._tracker.exp_earned
+        if exp <= 0:
+            self._kills_lbl.config(text="—")
+            return
+        if exp >= 1_000_000:
+            self._kills_lbl.config(text=f"+{exp / 1_000_000:.2f}M")
+        elif exp >= 1_000:
+            self._kills_lbl.config(text=f"+{exp / 1_000:.1f}k")
+        else:
+            self._kills_lbl.config(text=f"+{exp}")
+
+    def _start_stats(self):
+        self._stop_stats()
+        if self._kills_lbl:
+            self._kills_lbl.config(text="—")
+        if self._items_lbl:
+            self._items_lbl.config(text="—")
+        self._tracker.start()
+        # _tick_stats reschedules itself, but something has to fire the first
+        # one or the gold/rate labels never update at all.
+        self._tick_stats()
+
+    def _stop_stats(self):
+        if self._stats_job:
+            self.after_cancel(self._stats_job)
+            self._stats_job = None
+
+    def _tick_stats(self):
+        src = self._tracker.gold_source
+        if self._gold_earned_lbl and src != "unavailable":
+            earned = self._tracker.gold_earned
+            per_hr = self._tracker.gold_per_hour
+            self._gold_earned_lbl.config(text=self._fmt_gold(earned))
+            if self._gold_hr_lbl:
+                if per_hr >= 1_000_000:
+                    rate_str = f"{per_hr / 1_000_000:.2f}M/hr"
+                elif per_hr >= 1_000:
+                    rate_str = f"{per_hr / 1_000:.0f}k/hr"
+                elif per_hr > 0:
+                    rate_str = f"{per_hr}/hr"
+                else:
+                    rate_str = "—"
+                self._gold_hr_lbl.config(text=rate_str)
+            if self._gold_src_lbl:
+                mode = "live" if (src == "packets" and self._tracker.available) else "save-file"
+                self._gold_src_lbl.config(text=f"({mode})")
+        elif self._gold_src_lbl and src == "unavailable":
+            self._gold_src_lbl.config(text="install Npcap · run as admin for live data")
+        self._stats_job = self.after(2000, self._tick_stats)
 
     def _classify(self, line: str) -> str:
         low = line.lower()
@@ -686,6 +931,9 @@ class BotUI(tk.Tk):
             if self._stop_event:
                 self._stop_event.set()
             self._bot_thread.join(timeout=1.5)
+        self._save_settings()
+        self._stop_stats()
+        self._tracker.stop()
         sys.stdout = self._orig_stdout
         sys.stderr = self._orig_stderr
         if getattr(self, "_bot_log_file", None) is not None:
@@ -697,7 +945,34 @@ class BotUI(tk.Tk):
         self.destroy()
 
 
+def _ensure_admin() -> bool:
+    """
+    On Windows, re-launch the current script with admin rights if not already elevated.
+    Returns True if already admin (or non-Windows), False if relaunching.
+    Only elevates when Npcap is installed — otherwise admin is not needed.
+    """
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        return True
+    # Only bother elevating if Npcap is present
+    try:
+        ctypes.WinDLL("wpcap.dll")
+    except OSError:
+        return True  # no Npcap — admin not needed
+    # Re-launch this script elevated; the UAC dialog will appear
+    script = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script)
+    ctypes.windll.shell32.ShellExecuteW(
+        None, "runas", sys.executable, f'"{script}"', script_dir, 1
+    )
+    return False  # current (non-admin) process should exit
+
+
 def main():
+    if not _ensure_admin():
+        sys.exit(0)
     app = BotUI()
     try:
         app.mainloop()
