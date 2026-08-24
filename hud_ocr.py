@@ -26,6 +26,8 @@ detectors, so this adds no new runtime. Everything is fail-soft: any failure
 returns no name and leaves the caller on its existing code path.
 """
 
+import sys
+
 import cv2
 import numpy as np
 
@@ -73,9 +75,45 @@ def ocr_available():
         return False
 
 
+# rapidocr resolves its three components by BARE module name:
+#
+#     module_part = importlib.import_module(config['Det']['module_name'])
+#     return getattr(module_part, 'TextDetector')
+#
+# with module_name = "ch_ppocr_v3_det". That works in a normal install only
+# because rapid_ocr_api does sys.path.append(root_dir) on its own package
+# directory. In a Nuitka onefile build the compiled module lives at
+# rapidocr_onnxruntime.ch_ppocr_v3_det, while root_dir points at the extracted
+# folder holding the bundled config.yaml and NO code -- so the bare import finds
+# an empty namespace package and the getattr raises
+#
+#     AttributeError: module 'ch_ppocr_v3_det' has no attribute 'TextDetector'
+#
+# which is exactly what a live exe run reported. Binding the real compiled
+# submodules to their bare names first makes import_module return the right
+# object. A no-op in a normal install, where the names already resolve.
+_RAPIDOCR_COMPONENTS = ("ch_ppocr_v3_det", "ch_ppocr_v3_rec", "ch_ppocr_v2_cls")
+
+
+def _alias_rapidocr_submodules():
+    """Bind rapidocr's component packages to the bare names it imports by."""
+    import importlib
+    for name in _RAPIDOCR_COMPONENTS:
+        if name in sys.modules:
+            continue
+        try:
+            sys.modules[name] = importlib.import_module(
+                f"rapidocr_onnxruntime.{name}")
+        except Exception:
+            # Leave it unbound; read_satanic_zone reports the resulting
+            # failure with a reason rather than swallowing it.
+            pass
+
+
 def _default_engine():
     global _engine
     if _engine is None:
+        _alias_rapidocr_submodules()
         from rapidocr_onnxruntime import RapidOCR
         _engine = RapidOCR()
     return _engine

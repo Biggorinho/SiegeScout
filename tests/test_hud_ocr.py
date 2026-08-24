@@ -203,6 +203,47 @@ def test_satanic_line_found_but_zone_name_unknown():
     assert hud_ocr.last_failure_reason == "no_zone_match"
 
 
+@needs_ocr
+def test_rapidocr_components_resolve_by_bare_name():
+    """Guards the frozen-build failure, as far as a venv test can.
+
+    rapidocr does importlib.import_module("ch_ppocr_v3_det") + getattr, relying
+    on its own sys.path.append. In the onefile exe that bare name resolves to
+    the extracted data folder (config.yaml, no code) and the getattr raised
+    AttributeError. This asserts the aliasing binds real modules carrying the
+    expected classes.
+
+    It CANNOT reproduce the frozen failure -- in a venv the bare names resolve
+    on their own. Only an exe run proves the fix.
+    """
+    import sys as _sys
+    for name in hud_ocr._RAPIDOCR_COMPONENTS:
+        _sys.modules.pop(name, None)
+
+    hud_ocr._alias_rapidocr_submodules()
+
+    for name, cls in (("ch_ppocr_v3_det", "TextDetector"),
+                      ("ch_ppocr_v3_rec", "TextRecognizer"),
+                      ("ch_ppocr_v2_cls", "TextClassifier")):
+        assert name in _sys.modules, f"{name} was not bound"
+        assert hasattr(_sys.modules[name], cls), f"{name} has no {cls}"
+
+
+def test_aliasing_never_raises_when_rapidocr_is_absent():
+    """Must stay fail-soft: a missing package is reported by the caller."""
+    import sys as _sys
+    saved = {k: v for k, v in _sys.modules.items()
+             if k.startswith("rapidocr_onnxruntime") or k in hud_ocr._RAPIDOCR_COMPONENTS}
+    for k in saved:
+        del _sys.modules[k]
+    _sys.modules["rapidocr_onnxruntime"] = None  # force ImportError on submodule
+    try:
+        hud_ocr._alias_rapidocr_submodules()      # must not raise
+    finally:
+        del _sys.modules["rapidocr_onnxruntime"]
+        _sys.modules.update(saved)
+
+
 def test_successful_read_clears_the_reason():
     def ocr(img):
         return ([[_BOX, "Steam Train", 0.91]], 0.01)
