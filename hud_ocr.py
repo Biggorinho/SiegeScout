@@ -48,6 +48,21 @@ _MIN_MAGENTA = 0.02
 
 _engine = None
 
+# Why the most recent read_satanic_zone call produced no name, or None after a
+# successful read. Every failure path used to return an identical
+# (None, 0.0, None), so "rapidocr could not load inside the exe" and "the reader
+# found nothing" were indistinguishable — which is exactly the gap that left the
+# live "HUD satanic line unreadable" on every reset undiagnosed while the same
+# frames resolved correctly from source.
+last_failure_reason = None
+
+
+def _fail(reason):
+    """Record why no zone could be read, and return the empty result."""
+    global last_failure_reason
+    last_failure_reason = reason
+    return None, 0.0, None
+
 
 def ocr_available():
     """True when an OCR engine can be constructed."""
@@ -99,24 +114,29 @@ def read_satanic_zone(frame, candidates, ocr=None, min_magenta=_MIN_MAGENTA):
     `ocr` may be any callable taking an image, which keeps this testable
     without the OCR package installed.
     """
+    global last_failure_reason
     if frame is None or getattr(frame, "size", 0) == 0:
-        return None, 0.0, None
+        return _fail("no_frame")
     try:
         strip = hud_strip(frame)
         if strip.size == 0:
-            return None, 0.0, None
+            return _fail("empty_strip")
         engine = ocr if ocr is not None else _default_engine()
         result = engine(strip)
-    except Exception:
-        return None, 0.0, None
+    except Exception as exc:
+        # Includes the engine failing to construct — an ImportError or a
+        # missing-DLL OSError here is the signature of rapidocr not loading
+        # inside the onefile bundle, and it must not read as "found nothing".
+        return _fail(f"ocr_engine_error: {type(exc).__name__}: {exc}")
 
     # rapidocr returns (results, elapsed); a bare list is also accepted.
     lines = result[0] if isinstance(result, tuple) else result
     if not lines:
-        return None, 0.0, None
+        return _fail("ocr_found_no_text")
 
     hsv = cv2.cvtColor(strip, cv2.COLOR_BGR2HSV)
     best = (None, 0.0, None)
+    saw_satanic_line = False
     for entry in lines:
         try:
             box, text = entry[0], entry[1]
@@ -128,7 +148,14 @@ def read_satanic_zone(frame, candidates, ocr=None, min_magenta=_MIN_MAGENTA):
         if not (_magenta_fraction(hsv, box) >= min_magenta
                 or satanic_name.has_satanic_label(text)):
             continue          # difficulty/zone-level lines, or map labels
+        saw_satanic_line = True
         name, ratio = satanic_name.match_zone_name(text, candidates)
         if name is not None and ratio > best[1]:
             best = (name, ratio, text)
+
+    if best[0] is None:
+        # Split these two: "never saw the line" points at the colour/label
+        # gates, "saw it but matched nothing" points at OCR text quality.
+        return _fail("no_zone_match" if saw_satanic_line else "no_satanic_line")
+    last_failure_reason = None
     return best

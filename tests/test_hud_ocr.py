@@ -139,3 +139,76 @@ def test_missing_engine_is_fail_soft():
 
     name, ratio, _ = hud_ocr.read_satanic_zone(frame, ZONES, ocr=broken_ocr)
     assert name is None and ratio == 0.0
+
+
+# ── failure reasons ──────────────────────────────────────────────────────────
+#
+# Every failure below used to return an identical (None, 0.0, None), and
+# combat.read_satanic_zone_name logged one message for all of them. A live run
+# reported "HUD satanic line unreadable" on every reset while the SAME frames
+# resolved correctly from source, and there was no way to tell whether rapidocr
+# had failed to load inside the onefile exe or the reader had simply found
+# nothing. last_failure_reason exists to separate those.
+
+
+def _magenta_frame():
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    y0, _, x0, _ = hud_ocr.hud_strip_bounds(frame)
+    frame[y0 + 5:y0 + 20, x0 + 10:x0 + 200] = (200, 0, 200)   # BGR magenta
+    return frame
+
+
+_BOX = [[10, 5], [200, 5], [200, 20], [10, 20]]
+
+
+def test_engine_failure_is_distinguishable_from_finding_nothing():
+    """The exe mystery: an unloadable rapidocr must not look like empty text."""
+    def broken_ocr(img):
+        raise RuntimeError("engine exploded")
+
+    hud_ocr.read_satanic_zone(np.zeros((1080, 1920, 3), dtype=np.uint8),
+                              ZONES, ocr=broken_ocr)
+    reason = hud_ocr.last_failure_reason
+    assert reason.startswith("ocr_engine_error"), reason
+    assert "RuntimeError" in reason and "engine exploded" in reason
+
+
+def test_ocr_returning_no_text_is_its_own_reason():
+    hud_ocr.read_satanic_zone(np.zeros((1080, 1920, 3), dtype=np.uint8),
+                              ZONES, ocr=lambda img: ([], 0.01))
+    assert hud_ocr.last_failure_reason == "ocr_found_no_text"
+
+
+def test_missing_frame_is_its_own_reason():
+    hud_ocr.read_satanic_zone(None, ZONES)
+    assert hud_ocr.last_failure_reason == "no_frame"
+
+
+def test_text_present_but_no_satanic_line():
+    """Cream difficulty/zone-level lines only — nothing claims to be satanic."""
+    def ocr(img):
+        return ([[_BOX, "Nightmare", 0.9]], 0.01)
+
+    hud_ocr.read_satanic_zone(np.zeros((1080, 1920, 3), dtype=np.uint8),
+                              ZONES, ocr=ocr)
+    assert hud_ocr.last_failure_reason == "no_satanic_line"
+
+
+def test_satanic_line_found_but_zone_name_unknown():
+    """Distinguishes a bad OCR read from the reader never seeing the line."""
+    def ocr(img):
+        return ([[_BOX, "Qzzxwv Nowhere", 0.9]], 0.01)
+
+    hud_ocr.read_satanic_zone(_magenta_frame(), ZONES, ocr=ocr)
+    assert hud_ocr.last_failure_reason == "no_zone_match"
+
+
+def test_successful_read_clears_the_reason():
+    def ocr(img):
+        return ([[_BOX, "Steam Train", 0.91]], 0.01)
+
+    hud_ocr.read_satanic_zone(_magenta_frame(), ZONES, ocr=lambda i: ([], 0))
+    assert hud_ocr.last_failure_reason is not None
+    name, _, _ = hud_ocr.read_satanic_zone(_magenta_frame(), ZONES, ocr=ocr)
+    assert name == "Steam Train"
+    assert hud_ocr.last_failure_reason is None

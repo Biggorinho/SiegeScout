@@ -1092,7 +1092,8 @@ def read_satanic_zone_name(sct, full_mon):
     name, ratio, raw = hud_ocr.read_satanic_zone(
         frame, list(ZONE_NODES_WORLD.keys()))
     if name is None:
-        print("[SAT] HUD satanic line unreadable — will fall back to colour scan")
+        print(f"[SAT] HUD satanic line unreadable ({hud_ocr.last_failure_reason})"
+              f" — will fall back to colour scan")
     else:
         print(f"[SAT] HUD satanic zone: '{name}' (read {raw!r}, sim {ratio:.2f})")
     return name
