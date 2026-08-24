@@ -311,6 +311,12 @@ MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS   = 12.0      # don't revisit failed spots
 MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS     = 8.0       # give up after Xs on one target
 MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX   = _px(8)    # tolerance for "same spot"
 MINIMAP_RESOURCE_CLOSE_ATTEMPT_SECONDS  = 4.0       # if close this long, auto-mark attempted
+# How long the world may stay static while walking to a resource before the
+# target is written off. The approach branch continues past every EXPLORE stuck
+# detector, so without this the bot walks into geometry indefinitely — a live
+# run held one ore for 7.7s at 0.6px camera shift. Long enough to let a jump
+# land and take effect, short enough not to burn a farming cycle.
+RT_STATIC_GIVEUP_SECONDS                = 2.0
 # Once standing on/near a minimap-targeted resource, items and ore are both
 # collected by pressing F; ore needs a second F this many seconds later to mine.
 RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS  = 0.5

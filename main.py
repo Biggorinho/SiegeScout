@@ -62,6 +62,7 @@ from config import (
     RESOURCE_COLLECT_START_DELAY_SECONDS,
     ENABLE_MINIMAP_RESOURCE_TARGETING,
     MINIMAP_RESOURCE_PICKUP_DIST_PX,
+    RT_STATIC_GIVEUP_SECONDS,
     MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
     MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
@@ -357,6 +358,8 @@ def run(
     last_item_nudge_log_t        = 0.0
     last_rt_unrouted_log_t       = 0.0
     last_motion_stuck_log_t      = 0.0
+    last_rt_stuck_log_t          = 0.0
+    rt_stuck_since               = 0.0
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
     last_minimap_ore_t           = -1e9
@@ -1397,6 +1400,33 @@ def run(
                                       f"(dist={dot_distance(rt_target.pos, center):.0f}px)"
                                       f" -> straight-line approach")
                             if abs(rt_dx) + abs(rt_dy) > 0:
+                                # This branch continues, so it bypasses every
+                                # stuck detector in EXPLORE. Making it always
+                                # produce a move (see above) turned "stand still
+                                # doing nothing" into "walk into a wall forever":
+                                # a live run held one ore for 7.7s with the
+                                # camera dead static and no stuck line reachable.
+                                # Jump first — jumping is how the game gets you
+                                # over geometry — and give up on the target if
+                                # the world still is not scrolling.
+                                if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
+                                    if (now_loop - last_rt_stuck_log_t) >= 1.0:
+                                        last_rt_stuck_log_t = now_loop
+                                        print(f"[RT] world static approaching {rt_target.kind} at "
+                                              f"{rt_target.pos} -> jump, then drop if still stuck")
+                                    maybe_jump_with_movement(rt_dx, rt_dy, last_jump_t,
+                                                             force_aim=True)
+                                    if rt_stuck_since == 0.0:
+                                        rt_stuck_since = now_loop
+                                    elif (now_loop - rt_stuck_since) >= RT_STATIC_GIVEUP_SECONDS:
+                                        print(f"[RT] {rt_target.kind} unreachable after "
+                                              f"{now_loop - rt_stuck_since:.1f}s static -> dropping")
+                                        resource_targeter.mark_attempted(now_loop)
+                                        rt_stuck_since = 0.0
+                                        sleep_interruptible(0.03)
+                                        continue
+                                else:
+                                    rt_stuck_since = 0.0
                                 wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
                                 sleep_interruptible(0.03)
                                 continue
@@ -1713,7 +1743,16 @@ def run(
                 sleep_interruptible(random.uniform(EXPLORE_MOVE_MIN_SECONDS * _move_spd,
                                                    EXPLORE_MOVE_MAX_SECONDS * _move_spd))
                 if now_loop >= rightclick_busy_until:
-                    maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t)
+                    # Without force_aim the jump only fires when the cursor
+                    # already points within ~44° of the walk direction
+                    # (JUMP_ALIGNMENT_THRESHOLD 0.72). In EXPLORE the cursor is
+                    # parked wherever combat left it, so the jump mostly never
+                    # fired — exactly when the bot needs it to clear geometry.
+                    # When stuck, aim first so it actually jumps. force_aim
+                    # re-aims onto the JUMP_AIM_DISTANCE ring (240px), which is
+                    # what keeps a stale cursor off the pause-menu buttons.
+                    maybe_jump_with_movement(explore_dx, explore_dy, last_jump_t,
+                                             force_aim=explore_is_stuck)
 
             # ── STATE: ATTACK ─────────────────────────────────────────────────
             elif state == State.ATTACK:
