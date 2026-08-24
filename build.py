@@ -28,6 +28,24 @@ LAZY_PACKAGES = ("onnxruntime", "rapidocr_onnxruntime")
 # touches them.
 TRAINING_ONLY = ("torch", "torchvision", "ultralytics")
 
+# Interactive / dev-tooling packages that arrive only through scapy's OPTIONAL
+# paths, dragged in because stats_tracker needs scapy for packet capture:
+#
+#   IPython     scapy/arch/windows imports it inside _ask_user(), which returns
+#               early on `if not conf.interactive`. The exe is built
+#               --windows-console-mode=disable so it is never interactive, and
+#               the import sits in `except (NameError, ImportError)` with an
+#               input() fallback regardless.
+#   matplotlib  scapy/libs/matplot.py already catches the ImportError and logs
+#               "Won't be able to plot" -- optional by the library's own design.
+#   jedi/parso/pytest
+#               IPython dependencies only. jedi alone contributed 5057 data
+#               files to the 2026-08-24 build.
+#
+# None is reachable from a shipped code path, and nothing we wrote imports any
+# of them. Verified against the venv before excluding, not assumed.
+DEV_ONLY = ("IPython", "jedi", "parso", "matplotlib", "pytest")
+
 
 def make_ico():
     img = Image.open(LOGO_PNG).convert("RGBA").resize((256, 256), Image.LANCZOS)
@@ -129,7 +147,7 @@ def build():
     for pkg in LAZY_PACKAGES:
         cmd[-1:-1] = [f"--include-package={pkg}",
                       f"--include-package-data={pkg}"]
-    for pkg in TRAINING_ONLY:
+    for pkg in TRAINING_ONLY + DEV_ONLY:
         cmd[-1:-1] = [f"--nofollow-import-to={pkg}"]
     print("[build] running Nuitka — this takes a few minutes on first run")
     if _run(cmd) == 0:
