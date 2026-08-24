@@ -89,6 +89,7 @@ from config import (
 )
 import config
 import fusion
+import targeting
 from detectors import (
     classify_enemy_dots, get_hp_percent,
     is_death_screen, is_world_map_visible, is_safe_zone_banner_visible,
@@ -1047,23 +1048,16 @@ def run(
             if cached_mask is not None:
                 cached_mask = terrain_memory.apply(cached_mask)
 
-            if len(filtered_enemy_dots) > 1 and cached_mask is not None:
-                def _dot_score(entry):
-                    dot = (entry[0], entry[1])
-                    tier = entry[2]
-                    return ray_walkability_score(cached_mask, center, dot, samples=12) * 100 \
-                           - dot_distance(dot, center) * 0.3 + tier * 120.0
-                nearest_entry = max(filtered_enemy_dots, key=_dot_score)
-                nearest = (nearest_entry[0], nearest_entry[1])
-            else:
-                if filtered_enemy_dots:
-                    nearest_entry = max(filtered_enemy_dots, key=lambda entry: (entry[2], -dot_distance((entry[0], entry[1]), center)))
-                    nearest = (nearest_entry[0], nearest_entry[1])
-                else:
-                    nearest = None
-
-            # Confidence-based confirmation (replaces ENEMY_CONFIRM_FRAMES counter).
-            _confirmed_enemy_dots = enemy_confidence.update(filtered_enemy_dots, now_loop)
+            # Confidence-based confirmation (replaces ENEMY_CONFIRM_FRAMES
+            # counter) AND target choice, together: `nearest` is picked from
+            # the confirmed dots only. Selecting over every raw dot while
+            # gating on "did *any* dot confirm?" let a flickering ML phantom
+            # -- usually the nearest, so the preferred one -- be charged as
+            # the target while a real enemy elsewhere held the gate open.
+            _confirmed_enemy_dots, nearest = targeting.confirmed_enemy_target(
+                enemy_confidence, filtered_enemy_dots, now_loop, center,
+                cached_mask=cached_mask, walkability_fn=ray_walkability_score,
+            )
             confirmed_enemy_now = bool(_confirmed_enemy_dots)
             counters.enemy_dot_lost_before_confirm += enemy_confidence.pop_dropped_unconfirmed_count()
 
