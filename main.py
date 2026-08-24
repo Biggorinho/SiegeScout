@@ -360,10 +360,12 @@ def run(
     last_motion_stuck_log_t      = 0.0
     last_rt_stuck_log_t          = 0.0
     rt_stuck_since               = 0.0
+    loot_click_stuck_since       = 0.0
     explore_exit                 = "init"
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
     last_minimap_ore_t           = -1e9
+    last_minimap_item_t          = -1e9
     world_map_frames             = 0
     mining_active_until          = 0.0
     mining_target_screen         = None
@@ -1340,6 +1342,8 @@ def run(
                             raw_ore_dots = classify_ore_dots(minimap)
                         if raw_ore_dots:
                             last_minimap_ore_t = now_loop
+                        if raw_item_dots:
+                            last_minimap_item_t = now_loop
                         # Capture a full frame for on-screen resource labeling
                         # only when an ore/item dot is close to the player on
                         # the minimap (so the resource is actually on screen).
@@ -1610,7 +1614,19 @@ def run(
                             for b in ("Loot Goblin I", "Loot Goblin II"))
                 )
                 if (_enable_loot_items or _loot_goblin_active) and resource_collect_allowed and not confirmed_enemy_now:
-                    if (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
+                    # Gate the on-screen tag scan on recent MINIMAP item
+                    # evidence, exactly as the mining scan above is gated on
+                    # minimap ore. Without it this fired on screen tags while
+                    # the minimap saw zero items, and clicking a label that
+                    # never resolves keeps the label on screen — so it clicked
+                    # forever. A live run spent 17s static here, and exit=
+                    # loot_item_click was on essentially every stalled frame of
+                    # the session. Loot Goblin is exempt: its drops are the
+                    # whole point and worth scanning for unconditionally.
+                    minimap_item_recent = (now_loop - last_minimap_item_t) <= 8.0
+                    if not (minimap_item_recent or _loot_goblin_active):
+                        items_on_screen = []
+                    elif (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
 
@@ -1620,6 +1636,24 @@ def run(
                                 items_on_screen,
                                 key=lambda n: (n[0] - px) * (n[0] - px) + (n[1] - py) * (n[1] - py),
                             )
+                            # Clicking a label makes the character auto-walk to
+                            # it, so a label that never resolves keeps itself on
+                            # screen and gets clicked forever. Belt to the gate's
+                            # braces: if the world is not scrolling we are not
+                            # getting there, so stop feeding this branch and let
+                            # the normal stuck handling below run.
+                            if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
+                                if loot_click_stuck_since == 0.0:
+                                    loot_click_stuck_since = now_loop
+                                elif (now_loop - loot_click_stuck_since) >= RT_STATIC_GIVEUP_SECONDS:
+                                    print(f"[LOOT] item tag at ({int(tx)},{int(ty)}) not "
+                                          f"reachable after {now_loop - loot_click_stuck_since:.1f}s "
+                                          f"static -> ignoring it")
+                                    items_on_screen = []
+                                    loot_click_stuck_since = 0.0
+                                    last_loot_items_scan_t = now_loop
+                            else:
+                                loot_click_stuck_since = 0.0
                             if (now_loop - last_loot_items_click_t) >= LOOT_ITEMS_CLICK_INTERVAL_SECONDS:
                                 left_click_at(int(tx), int(ty), hold_time=0.05)
                                 tap_key('f', hold_time=0.04)
