@@ -85,6 +85,24 @@ def check_dependencies():
     print(f"[build] dependencies present in {Path(sys.executable).parent.name}")
 
 
+_RESOURCE_FAILURE = "Failed to add resources to file"
+_last_output = ""
+
+
+def _run(cmd):
+    """Run Nuitka, echoing its output while keeping a copy to inspect."""
+    global _last_output
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace")
+    _last_output = (proc.stdout or "") + (proc.stderr or "")
+    print(_last_output)
+    return proc.returncode
+
+
+def _last_output_had_resource_failure():
+    return _RESOURCE_FAILURE in _last_output
+
+
 def build():
     make_ico()
     check_dependencies()
@@ -114,8 +132,27 @@ def build():
     for pkg in TRAINING_ONLY:
         cmd[-1:-1] = [f"--nofollow-import-to={pkg}"]
     print("[build] running Nuitka — this takes a few minutes on first run")
-    subprocess.run(cmd, check=True)
-    print(f"[build] done -> {DIST_DIR / 'SiegeScout.exe'}")
+    if _run(cmd) == 0:
+        print(f"[build] done -> {DIST_DIR / 'SiegeScout.exe'}")
+        return
+
+    # Known Nuitka/anti-virus interaction: the very last step stamps the icon
+    # and version info into gui.dll, and Defender holds the file open to scan
+    # it. Nuitka retries five times, then aborts and discards a build that is
+    # otherwise complete -- 2500 compiled C files thrown away over a locked
+    # file. Only the resource step is affected, so dropping the icon rescues
+    # the build. The proper fix is a Defender exclusion for the build folder;
+    # this is the fallback so an hour of compilation is not lost to it.
+    if not _last_output_had_resource_failure():
+        raise SystemExit("[build] Nuitka failed; see the output above.")
+    print("[build] WARNING: anti-virus blocked icon/version stamping.")
+    print("[build] Retrying WITHOUT the custom icon so the build completes.")
+    print("[build] To keep the icon, exclude this folder from Defender:")
+    print(f'[build]   Add-MpPreference -ExclusionPath "{ROOT}"   (as admin)')
+    retry = [a for a in cmd if not a.startswith("--windows-icon-from-ico=")]
+    if _run(retry) != 0:
+        raise SystemExit("[build] Nuitka failed again; see the output above.")
+    print(f"[build] done (generic icon) -> {DIST_DIR / 'SiegeScout.exe'}")
 
 
 if __name__ == "__main__":
