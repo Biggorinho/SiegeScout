@@ -356,6 +356,7 @@ def run(
     last_mine_adjacent_log_t     = 0.0
     last_item_nudge_log_t        = 0.0
     last_rt_unrouted_log_t       = 0.0
+    last_motion_stuck_log_t      = 0.0
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
     last_minimap_ore_t           = -1e9
@@ -1521,6 +1522,20 @@ def run(
                             last_mining_click_t = now_loop
 
                         if mdist > MINING_APPROACH_MIN_DIST_PX:
+                            # This is a straight screen-space walk with no wall
+                            # avoidance, and the branch continues past EVERY
+                            # stuck detector in EXPLORE. So if the world is not
+                            # scrolling we are not reaching this ore and never
+                            # will — drop it rather than click it forever. A
+                            # live run showed six identical clicks at 477px
+                            # while the camera sat still.
+                            if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
+                                print(f"[MINE] world static while approaching ore at "
+                                      f"{mdist:.0f}px -> dropping unreachable target")
+                                mining_target_screen = None
+                                mining_active_until = 0.0
+                                sleep_interruptible(0.03)
+                                continue
                             wasd_move(mdx, mdy, random.uniform(
                                 MINING_APPROACH_MOVE_MIN_SECONDS,
                                 MINING_APPROACH_MOVE_MAX_SECONDS,
@@ -1574,8 +1589,15 @@ def run(
                 # static the bot is walking into geometry. (Loot pickups continue
                 # earlier, so this only sees genuine free-exploration stalls.)
                 if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
-                    if not explore_is_stuck:
-                        print(f"[MOTION] world not scrolling ({screen_motion.recent_shift():.2f}px) -> stuck")
+                    # Rate-limited but UNCONDITIONAL. This used to print only on
+                    # the transition into stuck, so a stall that was already
+                    # flagged went silent — which is why a live run showed 8-14s
+                    # of `static (state=EXPLORE)` with no explanation anywhere.
+                    if (now_loop - last_motion_stuck_log_t) >= 2.0:
+                        last_motion_stuck_log_t = now_loop
+                        print(f"[MOTION] world not scrolling "
+                              f"({screen_motion.recent_shift():.2f}px) -> stuck"
+                              f" (already_stuck={explore_is_stuck})")
                     explore_is_stuck = True
 
                 # Honour escape commitment — hold escape direction, suppress navigator.
