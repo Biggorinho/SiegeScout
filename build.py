@@ -50,8 +50,36 @@ def check_models():
     print(f"[build] bundling {MODELS_DIR.name}/ ({total / 1e6:.1f} MB of weights)")
 
 
+def check_dependencies():
+    """Fail loudly if the interpreter running the build lacks a runtime dep.
+
+    Nuitka bundles what IT can import, so building from an environment that is
+    missing a package produces an exe silently without it. This is easy to hit
+    because builds run from .venv while day-to-day work may run from a
+    different interpreter -- .venv had neither onnxruntime nor rapidocr for
+    months, so every exe built in that time shipped with the ML detectors dead
+    and quietly fell back to the old heuristics.
+    """
+    import importlib
+    required = ("onnxruntime", "rapidocr_onnxruntime", "cv2", "numpy",
+                "PIL", "mss", "keyboard", "httpx")
+    missing = []
+    for name in required:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            missing.append(name)
+    if missing:
+        raise SystemExit(
+            f"[build] ABORT: {sys.executable} cannot import {missing}.\n"
+            f"[build] Install them into THIS interpreter first:\n"
+            f"[build]   {sys.executable} -m pip install -r requirements.txt")
+    print(f"[build] dependencies present in {Path(sys.executable).parent.name}")
+
+
 def build():
     make_ico()
+    check_dependencies()
     check_models()
     cmd = [
         sys.executable, "-m", "nuitka",
