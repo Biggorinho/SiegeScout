@@ -17,6 +17,7 @@ dist/
 
 # Editor / tool dirs
 .claude/
+skills-lock.json
 .vscode/
 .continue/
 .agents/
