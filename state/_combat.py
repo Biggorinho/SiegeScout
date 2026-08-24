@@ -287,10 +287,6 @@ class EnemyChaser:
             self._stagnant_ticks   = 0
             self._best_dist_seen   = cur_dist
 
-        if self.path_queue:
-            if dot_distance(self.path_queue[0], center) < PATH_WAYPOINT_REACH_PX:
-                self.path_queue.pop(0)
-
         if not self.path_queue or enemy_moved or replan_due:
             mask = cached_mask if cached_mask is not None else buffered_walkable_mask(minimap_bgr, center)
             if mask is not None:
@@ -299,6 +295,17 @@ class EnemyChaser:
                     self.path_queue = smooth_path(raw, mask)
             self.last_enemy_pos = nearest
             self._replan_t      = now
+
+        # Drain EVERY waypoint already reached, and do it AFTER the replan above.
+        # _astar_grid_path starts its path at the start cell, so a freshly planned
+        # queue always has the player's own position at its head; consuming that
+        # yields a 0-6px command while the target is ~112px away. Draining before
+        # the replan (and only one waypoint per call) left it in place on every
+        # replan tick — and since ENEMY_CHASE_REPLAN_SECONDS is 0.25s while a move
+        # command runs ~1s, that was every tick. ExploreNavigator.get_move has
+        # always drained this way, which is why explore never showed the symptom.
+        while self.path_queue and dot_distance(self.path_queue[0], center) < PATH_WAYPOINT_REACH_PX:
+            self.path_queue.pop(0)
 
         if not self.path_queue:
             direct = dot_to_screen_delta(nearest, center)
