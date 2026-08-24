@@ -4,6 +4,7 @@ import math
 
 from config import (
     HP_BAR, PLAYER_EXCLUSION_RADIUS, PLAYER_EXCLUSION_RADIUS_FRAC,
+    PLAYER_LABEL_DX, PLAYER_LABEL_DY, PLAYER_LABEL_HUE, PLAYER_LABEL_SAT,
     ITEM_MATCH_THRESHOLD, SCREEN_W, SCREEN_H,
     COMPANION_WHITE_SUPPRESS_RADIUS, COMPANION_WHITE_MIN_V, COMPANION_WHITE_MAX_S,
     COMPANION_TRACK_RADIUS,
@@ -887,6 +888,31 @@ def _patch_teleport_cyan_ratio(hsv, cx, cy, r=6):
     return float(np.count_nonzero(cyan)) / float(max(1, cyan.size))
 
 
+def _is_player_label(hsv, x, y, cx, cy):
+    """True when (x, y) is the player marker or the username printed beside it.
+
+    Both render in the same cream tone as each other, and the item mask takes
+    any saturated bright hue, so letter glyphs come back as item stars. They
+    sit at a FIXED offset from the player, which is what made them survive
+    zone resets and keep the bot standing still targeting nothing.
+
+    Deliberately requires BOTH position and colour. Excluding the box outright
+    would discard real loot lying next to the player; excluding the colour
+    outright would discard gold rarity stars anywhere on the map.
+    """
+    dx, dy = x - cx, y - cy
+    if not (PLAYER_LABEL_DX[0] <= dx <= PLAYER_LABEL_DX[1]):
+        return False
+    if not (PLAYER_LABEL_DY[0] <= dy <= PLAYER_LABEL_DY[1]):
+        return False
+    patch = hsv[max(0, y - 2):y + 3, max(0, x - 2):x + 3].reshape(-1, 3)
+    if patch.size == 0:
+        return False
+    hue, sat = np.median(patch[:, 0]), np.median(patch[:, 1])
+    return bool(PLAYER_LABEL_HUE[0] <= hue <= PLAYER_LABEL_HUE[1]
+                and PLAYER_LABEL_SAT[0] <= sat <= PLAYER_LABEL_SAT[1])
+
+
 def classify_item_dots(minimap_bgr):
     """Return star-like item markers on the minimap as [x, y, tier, kind].
 
@@ -920,6 +946,10 @@ def classify_item_dots(minimap_bgr):
         x = int(M["m10"] / M["m00"])
         y = int(M["m01"] / M["m00"])
         if ((x - cx0) ** 2 + (y - cy0) ** 2) ** 0.5 < exclusion_radius:
+            continue
+        # The player marker and the username printed next to it are the same
+        # cream tone and pass the star shape gate.
+        if _is_player_label(hsv, x, y, cx0, cy0):
             continue
         # Teleport crosses are bright cyan and otherwise pass the shape gate.
         if _patch_teleport_cyan_ratio(hsv, x, y) > ITEM_STAR_TELEPORT_CYAN_MAX:

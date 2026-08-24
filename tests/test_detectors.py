@@ -274,3 +274,54 @@ def test_classify_item_dots_rejects_cyan_cross():
     cv2.rectangle(minimap, (28, 36), (52, 44), (255, 230, 60), -1)  # horizontal bar
     dots = classify_item_dots(minimap)
     assert not dots, f"cyan cross wrongly classified as item; got {dots}"
+
+# ── the player's username is not loot ───────────────────────────────────────
+
+def test_username_text_is_not_reported_as_an_item():
+    """The minimap prints the player's name beside the marker, in the same
+    cream tone as the marker itself (H~22 S~102 vs H~23 S~103). The item mask
+    takes any saturated bright hue, so the letter glyphs were being returned
+    as item stars -- at a FIXED offset from the player, so they survived zone
+    resets and the bot stood still targeting them until the 8s timeout, over
+    and over. Captured live 2026-08-24: (97,108) appeared in 19 of 31 frames.
+    """
+    from detectors import classify_item_dots
+    dots = classify_item_dots(_fixture("minimap_username_phantom.png"))
+    for x, y, *_ in dots:
+        assert not (85 <= x <= 150 and 95 <= y <= 130), \
+            f"username text reported as an item at ({x},{y})"
+
+
+def test_player_label_guard_rejects_the_cream_ui_tone_beside_the_player():
+    import cv2
+    import numpy as np
+    from detectors import _is_player_label
+    mm = _fixture("minimap_username_phantom.png")
+    hsv = cv2.cvtColor(mm, cv2.COLOR_BGR2HSV)
+    cx, cy = mm.shape[1] // 2, mm.shape[0] // 2
+    assert _is_player_label(hsv, 97, 108, cx, cy) is True
+
+
+def test_player_label_guard_keeps_a_saturated_item_beside_the_player():
+    """A real item lying next to the player must still be found -- the guard
+    is colour AND position, never position alone."""
+    import cv2
+    import numpy as np
+    from detectors import _is_player_label
+    mm = _fixture("minimap_username_phantom.png").copy()
+    # A vivid blue rarity star right where the username sits.
+    mm[104:112, 93:101] = (255, 90, 40)
+    hsv = cv2.cvtColor(mm, cv2.COLOR_BGR2HSV)
+    cx, cy = mm.shape[1] // 2, mm.shape[0] // 2
+    assert _is_player_label(hsv, 97, 108, cx, cy) is False
+
+
+def test_player_label_guard_ignores_cream_far_from_the_player():
+    """Away from the marker the guard must not fire at all, or gold loot
+    across the map would be discarded."""
+    import cv2
+    from detectors import _is_player_label
+    mm = _fixture("minimap_username_phantom.png")
+    hsv = cv2.cvtColor(mm, cv2.COLOR_BGR2HSV)
+    cx, cy = mm.shape[1] // 2, mm.shape[0] // 2
+    assert _is_player_label(hsv, 20, 200, cx, cy) is False

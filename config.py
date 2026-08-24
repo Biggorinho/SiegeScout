@@ -121,6 +121,23 @@ HP_RECOVERY_COOLDOWN_SECONDS = 2.5
 ATTACK_LOST_GRACE = 1.2
 PLAYER_EXCLUSION_RADIUS      = _px(14)
 PLAYER_EXCLUSION_RADIUS_FRAC = 0.06
+
+# The minimap prints the player's NAME beside the marker, in the same cream
+# tone as the marker itself (measured live: username H22/S102, marker
+# H14/S141 -- the item mask takes any saturated bright hue and cannot tell a
+# letter from a star). Because the text sits at a fixed offset from the
+# player it survived zone resets, so the bot targeted it and stood still
+# until the 8s timeout, repeatedly.
+#
+# Measured over 31 live frames the player UI spans dx -40..+36, dy -17..+29.
+# The box is widened rightwards because the sampled name ("Iceberg") is short
+# and a longer one runs further. The colour band is checked TOO, so a
+# saturated rarity star lying next to the player is still detected -- position
+# alone would throw away real loot.
+PLAYER_LABEL_DX              = (_px(-52), _px(112))
+PLAYER_LABEL_DY              = (_px(-26), _px(38))
+PLAYER_LABEL_HUE             = (10, 32)
+PLAYER_LABEL_SAT             = (70, 160)
 MOVE_AXIS_DEADZONE           = 10  # movement-vector threshold; abstract, not screen pixels
 
 EXPLORE_REPLAN_SECONDS       = 10.0
