@@ -1855,8 +1855,16 @@ def run(
                         attack_move_dx, attack_move_dy = chase_dx, chase_dy
                         if now_loop - _log_chase_t >= 2.0:
                             _log_chase_t = now_loop
-                            _ang = math.degrees(math.atan2(chase_dy, chase_dx))
-                            print(f"[PATH] A* chase dist={enemy_dist:.0f}px -> {_ang:.0f}°")
+                            # Log the MAGNITUDE, not just the heading. atan2(0, 0)
+                            # is 0.0, so a stand-still command and "due east" both
+                            # printed as 0° — which is exactly what hid the chase
+                            # bug fixed in 01c9bc3 for weeks of logs.
+                            _mag = math.hypot(chase_dx, chase_dy)
+                            if _mag < 1.0:
+                                print(f"[PATH] A* chase dist={enemy_dist:.0f}px -> STANDING STILL (cmd 0px)")
+                            else:
+                                _ang = math.degrees(math.atan2(chase_dy, chase_dx))
+                                print(f"[PATH] A* chase dist={enemy_dist:.0f}px -> {_ang:.0f}° cmd={_mag:.0f}px")
                     last_attack_move_plan_t = time.time()
 
                 wasd_move_and_attack(
