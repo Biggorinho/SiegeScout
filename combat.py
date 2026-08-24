@@ -23,6 +23,9 @@ from config import (
     DEATH_RESPAWN_CLICK_ATTEMPTS, DEATH_RESPAWN_RING_RADIUS_PX,
     DEATH_RESPAWN_POST_CLICK_CHECK_SECONDS,
     CORNER_ESCAPE_BURST_STEP_SECONDS,
+    ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX, WORLD_MAP_PX_PER_NOTCH,
+    MAP_OCR_ENABLED, MAP_NORMALIZE_CHUNK_NOTCHES, MAP_NORMALIZE_MAX_STEPS,
+    MAP_SCROLL_SETTLE_SECONDS,
 )
 from detectors import (
     grab_frame_bgr, is_world_map_visible, is_death_screen,
@@ -34,6 +37,9 @@ from input_control import (
     tap_key, sleep_interruptible, left_click_at,
     release_all_inputs, wasd_move, move_cursor_to, mouse_scroll,
 )
+
+import hud_ocr
+from map_scroll import plan_zone_click, scroll_to_edge
 
 
 def wait_for_world_map(sct, full_mon, retry_interact_key=None, timeout_seconds=None):
@@ -938,13 +944,22 @@ def _reopen_world_map_for_recenter(sct, full_mon):
         print("[SAT] recenter failed: world map not visible")
         return None
     # The map pans horizontally with the mouse wheel and the scroll position
-    # survives close/reopen — the calibrated node coordinates assume the
-    # leftmost position. Hover the map and scroll hard left to normalize.
+    # survives close/reopen — every calibrated coordinate is relative to the
+    # LEFT EDGE, so we have to actually arrive there. The old fixed 12-notch
+    # scroll moved 360px on a map measured at 3918px wide, which reached the
+    # edge only when the wheel happened to be near it already and silently
+    # read every coordinate at the wrong offset otherwise.
     move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
-    mouse_scroll(12)
-    if not sleep_interruptible(0.35):
+    frames, reason = scroll_to_edge(
+        lambda: grab_frame_bgr(sct, full_mon), mouse_scroll,
+        step=MAP_NORMALIZE_CHUNK_NOTCHES,
+        max_steps=MAP_NORMALIZE_MAX_STEPS,
+        settle=lambda: sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS))
+    if reason != "edge":
+        print(f"[SAT] left edge NOT reached ({reason}) — coordinates will be "
+              f"offset; falling back to the colour scan is safer")
         return None
-    return grab_frame_bgr(sct, full_mon)
+    return frames[-1] if frames else grab_frame_bgr(sct, full_mon)
 
 
 _SAFE_ZONE_WALK_CYCLE = ((1, 0), (0, 1), (-1, 0), (0, -1))
@@ -977,10 +992,39 @@ def handle_stray_world_map(sct, full_mon, target_zone=None):
     return False
 
 
+def read_satanic_zone_name(sct, full_mon):
+    """Read the satanic zone name off the HUD, or None.
+
+    Must be called from GAMEPLAY. The world map is fullscreen and hides the
+    HUD completely, so by the time a zone has to be picked the name is gone --
+    which is why this is read up front and carried into the map rather than
+    looked up when it is needed.
+    """
+    if not MAP_OCR_ENABLED:
+        return None
+    try:
+        frame = grab_frame_bgr(sct, full_mon)
+    except Exception:
+        # A capture hiccup must not take the whole vote reset down with it;
+        # the colour scan is still there to fall back on.
+        frame = None
+    name, ratio, raw = hud_ocr.read_satanic_zone(
+        frame, list(ZONE_NODES_WORLD.keys()))
+    if name is None:
+        print("[SAT] HUD satanic line unreadable — will fall back to colour scan")
+    else:
+        print(f"[SAT] HUD satanic zone: '{name}' (read {raw!r}, sim {ratio:.2f})")
+    return name
+
+
 def run_vote_reset_sequence(sct, full_mon, target_zone=None):
     """ESC menu vote reset (Shift+R removed — never reliably works)."""
     release_all_inputs()
     sleep_interruptible(0.50)
+
+    # Read the satanic zone before anything covers the HUD. Cheap enough at
+    # once per reset, and it is the only moment the name is on screen.
+    satanic_hint = None if target_zone else read_satanic_zone_name(sct, full_mon)
 
     if not _ensure_pause_menu_open(sct, full_mon):
         print("[RST] menu open but unconfirmed -> blind-click (no re-ESC)")
@@ -1013,48 +1057,69 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
         sct, full_mon, retry_interact_key=VOTE_RESET_INTERACT_KEY,
         timeout_seconds=VOTE_RESET_MAP_WAIT_SECONDS)
     if map_visible:
-        return pick_zone_from_open_map(sct, full_mon, frame, target_zone=target_zone)
+        return pick_zone_from_open_map(sct, full_mon, frame,
+                                       target_zone=target_zone,
+                                       satanic_hint=satanic_hint)
 
     print("[RST] vote reset failed after all retries")
     return False
 
 
-def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None):
+def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None,
+                            satanic_hint=None):
     """Find and click a zone node on an already-open world map.
 
-    target_zone=None  → auto-detect the satanic (red-highlighted) node.
-    target_zone="Name" → skip CV scan, click the known fixed coordinate directly.
+    target_zone="Name"  → click that zone's calibrated node.
+    satanic_hint="Name" → the satanic zone, read from the HUD before the map
+        was opened (the map is fullscreen and hides the HUD, so it cannot be
+        read from here).
+    Neither → fall back to hunting the red-highlighted node by colour.
+
     Returns True when the map closes (zone selected).
     """
     if frame is None:
         frame = grab_frame_bgr(sct, full_mon)
 
-    _reopen_world_map_for_recenter(sct, full_mon)
-    scan_frame = grab_frame_bgr(sct, full_mon)
+    normalized = _reopen_world_map_for_recenter(sct, full_mon)
+    scan_frame = normalized if normalized is not None else grab_frame_bgr(sct, full_mon)
 
-    # ── fixed zone: click known coordinate directly, no CV scan ──────────────
-    if target_zone is not None:
-        coords = SATANIC_FIXED_NODES.get(target_zone)
-        if coords is not None:
-            fx, fy = coords
-            click_y = fy + SATANIC_NODE_CLICK_Y_OFFSET
-            print(f"[RST] fixed zone '{target_zone}' at ({fx}, {fy})")
+    # ── named zone: scroll to its calibrated node and click it ──────────────
+    # One path for both an explicitly chosen zone and the satanic zone, since
+    # the HUD gives us the latter by name. Coordinates are world-space, so the
+    # zone may be off screen at the left edge and has to be scrolled into view.
+    wanted = target_zone or satanic_hint
+    if wanted is not None and normalized is not None:
+        plan = plan_zone_click(
+            wanted, ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX,
+            screen_w=SCREEN_W, px_per_notch=WORLD_MAP_PX_PER_NOTCH,
+            click_y_bias=-int(SCREEN_H * MAP_NODE_CLICK_Y_OFFSET_FRAC))
+        if plan is None:
+            print(f"[RST] no calibrated coordinate for '{wanted}' – colour scan")
+        else:
+            notches, cx, cy = plan
+            if notches:
+                move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
+                mouse_scroll(-notches)          # negative = wheel down = right
+                if not sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS + 0.15):
+                    return False
+            print(f"[RST] zone '{wanted}': {notches} notches right -> ({cx}, {cy})")
             r = SATANIC_NODE_CLICK_RING_RADIUS_PX
             offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
                        (r // 2, -r // 2), (-r // 2, -r // 2)]
-            result = _try_select_node_with_offsets(sct, full_mon, fx, click_y, offsets)
-            if not result:
+            if not _try_select_node_with_offsets(sct, full_mon, cx, cy, offsets):
                 # interrupted by stop signal — bail out entirely
                 if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
                     return True
                 return False
             if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
                 return True
-            # All offset clicks processed but map still open → fall through to fallback
-            print("[RST] fixed zone clicks missed – trying fallback coordinate")
-        else:
-            print(f"[RST] unknown zone '{target_zone}' – falling back to satanic scan")
-            target_zone = None  # treat as satanic mode
+            print(f"[RST] '{wanted}' clicks missed – trying the colour scan")
+            # We scrolled away from the origin, and the colour scan below reads
+            # coordinates relative to the left edge. Put it back first.
+            if _reopen_world_map_for_recenter(sct, full_mon) is None:
+                return False
+            scan_frame = grab_frame_bgr(sct, full_mon)
+        target_zone = None      # fall through to the colour scan
 
     # ── satanic auto-detect (when target_zone is None) ────────────────────────
     if target_zone is None:

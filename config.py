@@ -395,6 +395,18 @@ MAP_OPEN_DELAY_SECONDS      = 0.55
 MAP_SELECT_SETTLE_SECONDS   = 0.70
 MAP_NODE_CLICK_Y_OFFSET_FRAC = 0.006
 
+# Read the satanic zone name from the HUD instead of hunting a red-glowing
+# node by colour. Must be read during GAMEPLAY: the world map is fullscreen
+# and hides the HUD entirely (verified -- the reader returns None on every
+# captured map frame). False falls back to the colour scan.
+MAP_OCR_ENABLED              = True
+# Seeking the left edge: notches per iteration and a cap on iterations.
+# 80 x 8 x 30px = 19200px, far beyond the 3918px map, so the cap only trips
+# when scrolling is not working at all.
+MAP_NORMALIZE_CHUNK_NOTCHES  = 8
+MAP_NORMALIZE_MAX_STEPS      = 80
+MAP_SCROLL_SETTLE_SECONDS    = 0.30
+
 FALLBACK_NODE_X_FRAC = 0.36
 FALLBACK_NODE_Y_FRAC = 0.435
 
@@ -408,50 +420,7 @@ SATANIC_NODE_MIN_SCORE            = 16.0  # detection score threshold — abstra
 
 # Fixed world-map node coordinates (screen pixels on 1920x1080 map capture).
 # Satanic zone can spawn on any of these nodes.
-_SATANIC_FIXED_NODES_REF = {
-    # Reference coordinates calibrated on a 1920×1080 world map screenshot.
-    "Arctic Tundra": (306, 217),
-    "Chilling Lake": (196, 267),
-    # Recalibrated 2026-07-11 from a live rotation-failure frame (old value
-    # pointed at empty map): measured node minus the +25px scroll the offset
-    # voting corrects on every open. Same for Old Mining Village/Misty Swamp.
-    "Corrupted Cave": (565, 843),
-    "Corrupted Oasis": (820, 219),
-    "Crystal Village": (334, 306),
-    "Deep Space": (1392, 253),
-    "Dry Hills": (764, 354),
-    "Event Horizon": (1446, 369),
-    "Fields of Battle": (353, 588),
-    "Fuji Coast": (1117, 704),
-    "Highland Graveyard": (1062, 403),
-    "King's Garden": (432, 412),
-    "Misty Swamp": (1025, 811),
-    "MosArathim Desert": (684, 464),
-    "Mt. Fuji": (843, 789),
-    "Old Mining Village": (263, 850),
-    "Outskirts of Inoya": (370, 669),
-    "Parallel Dimension": (1300, 535),
-    "Prison Dungeon": (1011, 270),
-    "Pyramid Level 1": (860, 515),
-    "Pyramid Level 2": (944, 483),
-    "Sea of Karponia": (1248, 782),
-    "Snowy Mountains": (418, 153),
-    "Steam Train": (1157, 183),
-    "Subconscious Mind": (1469, 640),
-    "Temple of Zamjo": (1413, 805),
-    "The Black Hole": (1491, 459),
-    "The Cathedral": (1141, 317),
-    "The Depths of Hell": (1249, 437),
-    "The Devil's Breach": (698, 679),
-    "The Glacial Trail": (467, 265),
-    "The Highland Mines": (440, 765),
-    "The Nightmare": (578, 730),
-    "The Pumpkin Patch": (244, 525),
-    "Woodhill Plains": (339, 463),
-}
-SATANIC_FIXED_NODES = {
-    name: (_px(x), _px(y)) for name, (x, y) in _SATANIC_FIXED_NODES_REF.items()
-}
+
 
 
 # ── World-map zone coordinates (recalibrated 2026-08-24) ─────────────────────
@@ -535,6 +504,19 @@ _ZONE_NODES_WORLD_REF = {
 ZONE_NODES_WORLD = {
     name: (_px(x), _px(y)) for name, (x, y) in _ZONE_NODES_WORLD_REF.items()
 }
+
+# The old name, kept because gui.py builds its zone dropdown from it and
+# combat's colour-scan fallback votes map-scroll offsets against it. It now
+# points at the recalibrated table: the 35 hand-typed coordinates it used to
+# hold were invalidated by the season (1 of 35 within 15px of a real node),
+# which also left the offset voting finding a single agreeing pair.
+#
+# World coordinates are safe for both uses. The map is normalized to its left
+# edge before either runs, so on-screen zones ARE at their world x, and zones
+# beyond the first screen are skipped by _score_satanic_fixed_node's bounds
+# check rather than mis-scored. That also keeps the colour scan away from the
+# sepia region entirely, where its red-vs-orange test cannot work.
+SATANIC_FIXED_NODES = ZONE_NODES_WORLD
 
 ZONE_TRANSITION_FREEZE_SECONDS    = 3.0
 # Packet-driven early exit: zone packet shortens the freeze window once

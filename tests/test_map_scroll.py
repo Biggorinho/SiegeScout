@@ -151,3 +151,47 @@ def test_scroll_offset_never_exceeds_the_map():
     notches, screen_x = scroll_plan(99999, MAX_SCROLL)
     assert notches * 30 <= MAX_SCROLL + 30
     assert screen_x >= 99999 - MAX_SCROLL - 1
+
+
+# ── turning a zone name into a click plan ───────────────────────────────────
+from map_scroll import plan_zone_click  # noqa: E402
+
+TABLE = {
+    "Chilling Lake": (104, 411),        # left edge, no scrolling needed
+    "Abyss Realm": (3605, 447),         # far right, scroll clamps
+    "Volcanic Island": (2660, 189),     # mid-right, centrable
+}
+
+
+def test_left_edge_zone_is_clicked_without_scrolling():
+    plan = plan_zone_click("Chilling Lake", TABLE, MAX_SCROLL)
+    assert plan is not None
+    notches, cx, cy = plan
+    assert notches == 0
+    assert (cx, cy) == (104, 411)
+
+
+def test_far_right_zone_uses_the_clamped_offset():
+    notches, cx, cy = plan_zone_click("Abyss Realm", TABLE, MAX_SCROLL)
+    assert notches > 0
+    assert abs(cx - 1607) <= 2          # not 3605 - notches*30, which is off
+    assert cy == 447
+
+
+def test_unknown_zone_returns_none():
+    assert plan_zone_click("Atlantis", TABLE, MAX_SCROLL) is None
+
+
+def test_click_y_bias_compensates_for_the_click_helpers_own_offset():
+    """_click_node_and_choose adds ~6.5px before clicking; passing a negative
+    bias makes the real click land on the node centre instead of its lower rim
+    (median node radius is only 9.6px)."""
+    _, _, cy = plan_zone_click("Chilling Lake", TABLE, MAX_SCROLL,
+                               click_y_bias=-7)
+    assert cy == 411 - 7
+
+
+def test_plan_is_integral_so_it_can_be_clicked():
+    for name in TABLE:
+        notches, cx, cy = plan_zone_click(name, TABLE, MAX_SCROLL)
+        assert isinstance(notches, int) and isinstance(cx, int) and isinstance(cy, int)

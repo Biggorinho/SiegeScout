@@ -102,3 +102,24 @@ def scroll_plan(world_x, max_scroll_px, screen_w=1920, px_per_notch=PX_PER_NOTCH
     notches = int(round(desired / px_per_notch))
     actual = min(notches * px_per_notch, float(max_scroll_px))
     return notches, world_x - actual
+
+
+def plan_zone_click(zone_name, zone_table, max_scroll_px, screen_w=1920,
+                    px_per_notch=PX_PER_NOTCH, click_y_bias=0):
+    """Plan the click for a named zone: ``(notches_right, click_x, click_y)``.
+
+    Returns None for a zone with no calibrated coordinate, so callers can fall
+    back rather than click a guessed position.
+
+    `click_y_bias` offsets the returned y. combat's _click_node_and_choose
+    adds ~0.6% of screen height before clicking, and the median map node has a
+    radius of only 9.6px, so passing the negative of that lands the real click
+    on the node centre instead of its lower rim.
+    """
+    entry = zone_table.get(zone_name)
+    if entry is None:
+        return None
+    world_x, world_y = entry
+    notches, screen_x = scroll_plan(world_x, max_scroll_px, screen_w,
+                                    px_per_notch)
+    return notches, int(round(screen_x)), int(round(world_y + click_y_bias))
