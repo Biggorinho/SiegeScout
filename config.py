@@ -79,10 +79,13 @@ LOCAL_MINIMAP_MODEL_CLASSES = [
 LOCAL_MINIMAP_MODEL_INPUT_SIZE = 480  # static export size; must match training
 LOCAL_MINIMAP_MODEL_CONF = 0.40
 
-LOCAL_SCREEN_MODEL_ENABLED = False    # no dataset yet — placeholder wiring
+LOCAL_SCREEN_MODEL_ENABLED = True
 LOCAL_SCREEN_MODEL_PATH = os.path.join(_MODELS_DIR, "screen.onnx")
-LOCAL_SCREEN_MODEL_CLASSES = ["enemy", "healthbar", "teleport"]
-LOCAL_SCREEN_MODEL_INPUT_SIZE = 416
+# On-screen clickable resources (trained on full 1920x1080 loot frames the
+# user labeled). Order must match training/train_screen_local.py SCREEN_CLASSES.
+# Replaces the noisy find_ore_nodes_on_screen heuristic once the gate passes.
+LOCAL_SCREEN_MODEL_CLASSES = ["ore", "item"]
+LOCAL_SCREEN_MODEL_INPUT_SIZE = 640   # full frame; ore veins are large
 LOCAL_SCREEN_MODEL_CONF = 0.40
 
 MINIMAP_SMALL = {

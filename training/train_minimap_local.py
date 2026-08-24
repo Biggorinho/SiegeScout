@@ -27,7 +27,9 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_ZIP = ROOT / "minimapVision.v2i.yolov12.zip"
+# The combined Roboflow export also contains the 249 minimap crops
+# (eval_/train_ prefixed); build_crop_dataset filters to just those.
+DEFAULT_ZIP = ROOT / "minimapVision.yolov12.zip"
 DATASETS_DIR = ROOT / "training" / "datasets"
 RUNS_DIR = ROOT / "training" / "runs"
 MODELS_DIR = ROOT / "assets" / "models"
@@ -86,7 +88,10 @@ def build_crop_dataset(zip_path: Path) -> Path:
     kept = Counter()
     moved = Counter()
     for srcsplit in ("train", "valid", "test"):
-        for img in (tmp / srcsplit / "images").glob("*.jpg"):
+        img_dir = tmp / srcsplit / "images"
+        if not img_dir.is_dir():
+            continue
+        for img in img_dir.iterdir():  # crops may be .jpg or .png per export
             base = img.name
             noext = img.stem
             if base.startswith("eval_"):

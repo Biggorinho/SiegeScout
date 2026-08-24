@@ -40,3 +40,11 @@ training/screen_dataset_raw/
 
 # Loose screenshots dropped in the project root
 Screenshot *.png
+
+# Loot frames staged for labeling (large, local-only)
+loot_frames/
+
+# Ultralytics val/predict output (best.val() ignores project= and writes here)
+runs/
+# Auto-downloaded YOLO base weights (re-fetched on demand by the trainers)
+yolo11n.pt

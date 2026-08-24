@@ -286,6 +286,20 @@ def run(
         minimap_ml = _mm if _mm.available else None
         print(f"[MINIMAP_ML] enabled; detector "
               f"{'ready' if minimap_ml else 'unavailable — heuristics only'}")
+    # Local ML on-screen resource detector: replaces the noisy
+    # find_ore_nodes_on_screen heuristic for mining when enabled + loaded.
+    screen_ml = None
+    if config.LOCAL_SCREEN_MODEL_ENABLED:
+        from local_inference import OnnxDetector
+        _sm = OnnxDetector(
+            config.LOCAL_SCREEN_MODEL_PATH,
+            config.LOCAL_SCREEN_MODEL_CLASSES,
+            config.LOCAL_SCREEN_MODEL_INPUT_SIZE,
+            conf_threshold=config.LOCAL_SCREEN_MODEL_CONF,
+        )
+        screen_ml = _sm if _sm.available else None
+        print(f"[SCREEN_ML] enabled; detector "
+              f"{'ready' if screen_ml else 'unavailable — heuristics only'}")
     minimap_mode                 = "small"
     last_attack_activity_t       = time.time()
     zone_had_attack              = False
@@ -1452,7 +1466,17 @@ def run(
                     )
                     ores_on_screen = []
                     if mining_should_scan:
-                        ores_on_screen = find_ore_nodes_on_screen(frame)
+                        if screen_ml is not None:
+                            # ML on-screen ore: precise vein boxes instead of
+                            # the heuristic's 50-90 phantom "nodes". Same
+                            # (x, y, kind, score) shape the rest of this block
+                            # expects. Fail-soft: {} -> [] -> retry next scan.
+                            ores_on_screen = [
+                                (int(d["x"]), int(d["y"]), "ore", d["confidence"])
+                                for d in screen_ml.detect(frame).get("ore", [])
+                            ]
+                        else:
+                            ores_on_screen = find_ore_nodes_on_screen(frame)
                         last_mining_scan_t = now_loop
 
                     if ores_on_screen:
