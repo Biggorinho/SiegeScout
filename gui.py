@@ -241,18 +241,14 @@ class BotUI(tk.Tk):
         self._cta_container        = None   # tk.Frame | None
         self._runtime_sec = 0
         self._runtime_job = None
+        # Only zone/buffs and gold are wired up. char, item and kill callbacks
+        # were dropped along with their labels — see the stats card for why.
         self._tracker = _stats.init_tracker(
             on_zone_entered=self._on_zone_entered_packet,
-            on_char_updated=self._on_char_updated_packet,
-            on_item_dropped=self._on_item_dropped_packet,
-            on_enemy_killed=self._on_kill_packet,
         )
         self._stats_job: str | None = None
-        self._char_lbl: tk.Label | None = None
         self._zone_lbl: tk.Label | None = None
         self._buffs_lbl: tk.Label | None = None
-        self._items_lbl: tk.Label | None = None
-        self._kills_lbl: tk.Label | None = None
         self._gold_earned_lbl: tk.Label | None = None
         self._gold_hr_lbl: tk.Label | None = None
         self._gold_src_lbl: tk.Label | None = None
@@ -345,14 +341,13 @@ class BotUI(tk.Tk):
                               highlightbackground=BORDER, highlightthickness=1)
         stats_card.pack(fill=tk.X, pady=(10, 0))
 
-        char_row = tk.Frame(stats_card, bg=SURFACE)
-        char_row.pack(fill=tk.X)
-        tk.Label(char_row, text="CHAR", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
-        self._char_lbl = tk.Label(char_row, text="—", bg=SURFACE, fg=FG, font=self.f_ui)
-        self._char_lbl.pack(side=tk.LEFT, padx=(8, 0))
-
+        # CHAR / EXP / ITEMS are deliberately absent. A 2026-08-24 live run
+        # showed no character and no kill/exp packet arrives at all, and while
+        # itemsAdded packets DO arrive nothing decodes them into the per-rarity
+        # counts the label read — so all three sat at "—" for the whole session.
+        # Showing a permanently empty stat is worse than not showing it.
         zone_row = tk.Frame(stats_card, bg=SURFACE)
-        zone_row.pack(fill=tk.X, pady=(4, 0))
+        zone_row.pack(fill=tk.X)
         tk.Label(zone_row, text="ZONE", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(side=tk.LEFT)
         self._zone_lbl = tk.Label(zone_row, text="—", bg=SURFACE, fg=BLUE, font=self.f_ui)
         self._zone_lbl.pack(side=tk.LEFT, padx=(8, 0))
@@ -365,7 +360,7 @@ class BotUI(tk.Tk):
 
         tk.Frame(stats_card, bg=BORDER, height=1).pack(fill=tk.X, pady=(6, 0))
 
-        # ── 2×2 stat grid: KILLS | ITEMS  /  GOLD | RATE ─────────────────────
+        # ── GOLD | RATE ──────────────────────────────────────────────────────
         def _stat_cell(parent, label, color):
             cell = tk.Frame(parent, bg=SURFACE)
             cell.pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -374,13 +369,8 @@ class BotUI(tk.Tk):
             val.pack(side=tk.LEFT, padx=(8, 0))
             return val
 
-        row_a = tk.Frame(stats_card, bg=SURFACE)
-        row_a.pack(fill=tk.X, pady=(6, 0))
-        self._kills_lbl = _stat_cell(row_a, "EXP", GREEN)
-        self._items_lbl = _stat_cell(row_a, "ITEMS", FG)
-
         row_b = tk.Frame(stats_card, bg=SURFACE)
-        row_b.pack(fill=tk.X, pady=(4, 0))
+        row_b.pack(fill=tk.X, pady=(6, 0))
         self._gold_earned_lbl = _stat_cell(row_b, "GOLD", YELLOW)
         self._gold_hr_lbl     = _stat_cell(row_b, "RATE", FG_MUTE)
 
@@ -786,63 +776,12 @@ class BotUI(tk.Tk):
             self._zone_lbl.config(text=zone_name)
         if self._buffs_lbl:
             self._buffs_lbl.config(text=" · ".join(buff_names) if buff_names else "—")
-        if self._items_lbl:
-            self._items_lbl.config(text="—")
         self._push_log(f"Zone entered: {zone_name}", "info")
         if buff_names:
             self._push_log(f"Buffs: {', '.join(buff_names)}", "info")
 
-    def _on_char_updated_packet(self, char: dict):
-        self.after(0, self._on_char_updated_main, char)
-
-    def _on_char_updated_main(self, char: dict):
-        if self._char_lbl:
-            lv = f"Lv{char['level']}"
-            if char.get("herolevel", 0) > 0:
-                lv += f" HL{char['herolevel']}"
-            self._char_lbl.config(text=f"{char['name']}  ·  {char['class_name']}  ·  {lv}")
-
-    def _on_item_dropped_packet(self, _rarity: int):
-        self.after(0, self._on_item_dropped_main)
-
-    def _on_item_dropped_main(self):
-        if not self._items_lbl:
-            return
-        items = self._tracker.items_by_rarity
-        if not items:
-            self._items_lbl.config(text="—")
-            return
-        _rarity_short = {1: "M", 2: "R", 3: "H", 4: "A"}
-        parts = [
-            f"{items[r]}{_rarity_short[r]}"
-            for r in sorted(items.keys(), reverse=True)
-            if r > 0 and r in _rarity_short
-        ]
-        self._items_lbl.config(text=" ".join(parts) if parts else "—")
-
-    def _on_kill_packet(self, _exp_delta: int):
-        self.after(0, self._on_kill_main)
-
-    def _on_kill_main(self):
-        if not self._kills_lbl:
-            return
-        exp = self._tracker.exp_earned
-        if exp <= 0:
-            self._kills_lbl.config(text="—")
-            return
-        if exp >= 1_000_000:
-            self._kills_lbl.config(text=f"+{exp / 1_000_000:.2f}M")
-        elif exp >= 1_000:
-            self._kills_lbl.config(text=f"+{exp / 1_000:.1f}k")
-        else:
-            self._kills_lbl.config(text=f"+{exp}")
-
     def _start_stats(self):
         self._stop_stats()
-        if self._kills_lbl:
-            self._kills_lbl.config(text="—")
-        if self._items_lbl:
-            self._items_lbl.config(text="—")
         self._tracker.start()
         # _tick_stats reschedules itself, but something has to fire the first
         # one or the gold/rate labels never update at all.
