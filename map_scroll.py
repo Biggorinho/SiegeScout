@@ -76,3 +76,29 @@ def scroll_to_edge(grab, scroll, step, max_steps=200, on_capture=None,
         if settle is not None:
             settle()
     return frames, "max_steps"
+
+
+def scroll_plan(world_x, max_scroll_px, screen_w=1920, px_per_notch=PX_PER_NOTCH):
+    """Plan how far to scroll right to put a world coordinate on screen.
+
+    Zone coordinates are stored in *world* space -- their x on a map panned
+    fully left -- because the map is 3918px wide and most zones are off screen
+    at any one time. Screen position is then simply ``world_x - offset``.
+
+    Returns ``(notches_right, screen_x)``: how many wheel-down notches to send
+    from the left edge, and where the zone will then be on screen.
+
+    Two clamps matter and both are easy to get wrong:
+
+    * The map stops at `max_scroll_px`, so the right-most zones cannot be
+      centred and simply sit wherever the clamp leaves them.
+    * `max_scroll_px` is not a whole number of notches (1997.7 vs 30px), so
+      the final notch is short. Computing screen position as
+      ``notches * px_per_notch`` puts the far-right zones ~12px off, which is
+      most of the click tolerance.
+    """
+    desired = world_x - screen_w / 2.0
+    desired = max(0.0, min(desired, float(max_scroll_px)))
+    notches = int(round(desired / px_per_notch))
+    actual = min(notches * px_per_notch, float(max_scroll_px))
+    return notches, world_x - actual

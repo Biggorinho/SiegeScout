@@ -453,6 +453,89 @@ SATANIC_FIXED_NODES = {
     name: (_px(x), _px(y)) for name, (x, y) in _SATANIC_FIXED_NODES_REF.items()
 }
 
+
+# ── World-map zone coordinates (recalibrated 2026-08-24) ─────────────────────
+# The map is ONE horizontally-scrolling image 3918px wide at 1920x1080; it pans
+# 30px per wheel notch and clamps after 1997.7px. Coordinates below are in
+# WORLD space -- x on a map panned fully left -- because most zones are off
+# screen at any given scroll position. Screen position is `world_x - offset`;
+# use map_scroll.scroll_plan() rather than computing it by hand, since the
+# final notch is short and naive arithmetic misses the right-hand zones.
+#
+# Derived by tools/calibrate_map.py + OCR of the map's own labels, not by hand:
+# every zone's node was located in each frame it appeared in and the readings
+# agreed exactly (zero spread). Two zones had no blue node to detect at capture
+# time -- Forest of the Slain was the active satanic zone (red glow) and
+# Flooded Plains renders black -- so their nodes come from the label offset,
+# which is +32.5px in y with a standard deviation of 0.81px across 44 zones.
+#
+# This SUPERSEDES _SATANIC_FIXED_NODES_REF above, which the season invalidated:
+# only 1 of its 35 entries still lands within 15px of a real node.
+WORLD_MAP_WIDTH_PX      = _px(3918)
+WORLD_MAP_MAX_SCROLL_PX = _px(1997.7)
+WORLD_MAP_PX_PER_NOTCH  = _px(30)
+
+_ZONE_NODES_WORLD_REF = {
+    # ── Act 1 ──────────────────────────────────────────────────
+    "Outskirts of Inoya": (339, 725),
+    "Fields of Battle": (318, 654),
+    "The Pumpkin Patch": (221, 594),
+    "Woodhill Plains": (305, 548),
+    "King's Garden": (387, 488),
+    # ── Act 2 ──────────────────────────────────────────────────
+    "Crystal Village": (309, 404),
+    "Chilling Lake": (104, 411),
+    "Arctic Tundra": (197, 369),
+    "Snowy Mountains": (282, 306),
+    "The Glacial Trail": (446, 371),
+    # ── Act 3 ──────────────────────────────────────────────────
+    "Corrupted Oasis": (729, 351),
+    "Dry Hills": (705, 432),
+    "Mos'Arthim Desert": (621, 542),
+    "Pyramid Level 1": (759, 608),
+    "Pyramid Level 2": (797, 539),
+    # ── Act 4 ──────────────────────────────────────────────────
+    "Old Mining Village": (240, 896),
+    "The Highland Mines": (410, 810),
+    "Corrupted Cave": (513, 887),
+    "The Nightmare": (525, 783),
+    "The Devil's Breach": (630, 747),
+    # ── Act 5 ──────────────────────────────────────────────────
+    "Mt. Fuji": (770, 842),
+    "Misty Swamp": (917, 870),
+    "Fuji Coast": (1013, 758),
+    "Sea of Karponia": (1110, 834),
+    "Temple of Zamjo": (1259, 891),
+    # ── Act 6 ──────────────────────────────────────────────────
+    "Highland Graveyard": (938, 504),
+    "The Cathedral": (1025, 437),
+    "Prison Dungeon": (999, 326),
+    "Steam Train": (1110, 348),
+    "The Depths of Hell": (1134, 515),
+    # ── Act 7 ──────────────────────────────────────────────────
+    "Deep Space": (1253, 353),
+    "Event Horizon": (1310, 461),
+    "The Black Hole": (1167, 600),
+    "Parallel Dimension": (1221, 649),
+    "Subconscious Mind": (1296, 744),
+    # ── Act 8 ──────────────────────────────────────────────────
+    "Forest of the Slain": (1514, 330),
+    "Flooded Plains": (1617, 377),
+    "Forgotten Caves": (1764, 459),
+    "Camp of Souls": (1623, 567),
+    "Hellheim": (1736, 615),
+    # ── Abyss, added by the 2026-08 season ──────────────────────────
+    "Volcanic Island": (2660, 189),
+    "Boreal Island": (2363, 486),
+    "Tormented Reef": (2499, 840),
+    "Abyss Jungle": (3125, 594),
+    "Shipwreck Cove": (3233, 803),
+    "Abyss Realm": (3605, 447),
+}
+ZONE_NODES_WORLD = {
+    name: (_px(x), _px(y)) for name, (x, y) in _ZONE_NODES_WORLD_REF.items()
+}
+
 ZONE_TRANSITION_FREEZE_SECONDS    = 3.0
 # Packet-driven early exit: zone packet shortens the freeze window once
 # MIN_FREEZE seconds have elapsed and SETTLE seconds have passed since the packet.
