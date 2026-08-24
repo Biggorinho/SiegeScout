@@ -19,6 +19,7 @@ from config import (
     ATTACK_BACKPEDAL_STRENGTH, ATTACK_ORBIT_BACKPEDAL_STRENGTH,
     KITE_COMMIT_MIN_SECONDS, KITE_COMMIT_MAX_SECONDS,
     WALL_BUFFER_ITERATIONS,
+    MELEE_FLEE_MINIMAP_DIST,
 )
 from minimap import (
     build_walkable_minimap_mask, connected_walkable_mask, buffered_walkable_mask,
@@ -30,7 +31,7 @@ from pathfinding._astar import (
 )
 
 
-def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=32, samples=14,
+def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=48, samples=14,
                         recent_angles=None):
     """Test 16 directions (22.5° steps); return screen-space delta for the most walkable one.
 
@@ -224,8 +225,12 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
         if sector_tracker is not None:
             repeat_penalty += sector_tracker.penalty(angle)
 
+        # Frontier cells on the edge of unexplored territory are reachable via A*
+        # even when the straight-line ray is partially blocked — allow lower thresholds.
+        is_frontier = frontier_mask is not None and frontier_mask[ty, tx] > 0
+
         path_score = ray_walkability_score(walkable, center, (tx, ty), samples=18)
-        if path_score < 0.42:
+        if path_score < (0.25 if is_frontier else 0.42):
             return
 
         clearance = float(clearance_map[ty, tx])
@@ -235,14 +240,15 @@ def minimap_explore_target(minimap_bgr, center, recent_angles, blocked_angles=No
         probe_tx = int(max(0, min(w - 1, cx + math.cos(angle) * min(28.0, dist * 0.4))))
         probe_ty = int(max(0, min(h - 1, cy + math.sin(angle) * min(28.0, dist * 0.4))))
         forward_score = ray_walkability_score(walkable, center, (probe_tx, probe_ty), samples=12)
-        if forward_score < 0.38:
+        if forward_score < (0.20 if is_frontier else 0.38):
             return
 
         clearance_bonus = min(42.0, clearance * 8.5)
-        score = dist * 2.5 + (path_score * 120.0) + (forward_score * 70.0) + clearance_bonus - repeat_penalty
+        # Higher distance weight so the bot strongly prefers targets far from spawn.
+        score = dist * 4.0 + (path_score * 120.0) + (forward_score * 70.0) + clearance_bonus - repeat_penalty
 
         # Frontier bonus: cell sits right on the edge of unexplored territory
-        if frontier_mask is not None and frontier_mask[ty, tx] > 0:
+        if is_frontier:
             score += 320.0
         elif unknown_fog[ty, tx] > 0:
             score += 200.0
@@ -366,11 +372,28 @@ def choose_recent_enemy_delta(minimap_bgr, center, recent_enemy_dot=None, recent
 def choose_attack_move_delta(
     aim_dx, aim_dy, minimap_bgr, center, recent_angles, strafe_sign,
     enemy_dist=None, kite_committed_until=0.0, kite_cached_move=None,
-    terrain_memory=None,
+    terrain_memory=None, melee_mode=False,
 ):
     """Pick movement while attacking: approach when far, orbit at range, flee when close.
     Returns (move_delta, strafe_sign, kite_committed_until, kite_cached_move)."""
     now = time.time()
+
+    if melee_mode:
+        # Melee: always advance into the enemy; only back off if literally overlapping.
+        flee_dist = MELEE_FLEE_MINIMAP_DIST
+        if enemy_dist is not None and enemy_dist < flee_dist and (abs(aim_dx) + abs(aim_dy)) > 10:
+            flee_x = -aim_dx * ATTACK_BACKPEDAL_STRENGTH
+            flee_y = -aim_dy * ATTACK_BACKPEDAL_STRENGTH
+            return scale_vector(flee_x, flee_y, min_len=150, max_len=280), strafe_sign, 0.0, None
+        if (abs(aim_dx) + abs(aim_dy)) > 10:
+            # Advance with slight strafe variation to avoid getting stuck on geometry.
+            juke = strafe_sign if random.random() < 0.25 else -strafe_sign
+            move_x = 0.95 * aim_dx + 0.15 * (-aim_dy * juke)
+            move_y = 0.95 * aim_dy + 0.15 * ( aim_dx * juke)
+            delta = scale_vector(move_x, move_y, min_len=95, max_len=190)
+            commit = now + random.uniform(0.35, 0.60)
+            return delta, juke, commit, delta
+        return random_explore_delta(), strafe_sign, 0.0, None
 
     if enemy_dist is not None and enemy_dist < ATTACK_FLEE_MINIMAP_DIST and (abs(aim_dx) + abs(aim_dy)) > 10:
         flee_x = -aim_dx * ATTACK_BACKPEDAL_STRENGTH
