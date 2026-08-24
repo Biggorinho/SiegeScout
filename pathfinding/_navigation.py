@@ -31,6 +31,30 @@ from pathfinding._astar import (
 )
 
 
+def resource_approach_delta(mask, center, target_pos):
+    """Screen-space delta toward a minimap resource dot.
+
+    Returns (dx, dy, routed). `routed` is False when A* found no route and the
+    straight-line fallback is in use, so the caller can log the difference
+    instead of guessing.
+
+    A* legitimately fails here: buffered_walkable_mask erodes walls by
+    WALL_BUFFER_ITERATIONS and _nearest_walkable_cell only searches radius=6
+    grid cells (18 minimap px at PATH_GRID_STEP=3), so a dot lying inside an
+    eroded region has no reachable cell. The caller used to treat that as
+    "do nothing", which left the bot standing still for the full 8s travel
+    timeout in front of an item it had detected correctly. Moving in roughly
+    the right direction is strictly better: the game slides the character
+    along collision, and any movement changes the mask for the next replan.
+    """
+    waypoint = _a_star_next_waypoint(mask, center, target_pos) if mask is not None else None
+    if waypoint is not None:
+        dx, dy = dot_to_screen_delta(waypoint, center)
+        return dx, dy, True
+    dx, dy = dot_to_screen_delta(target_pos, center)
+    return dx, dy, False
+
+
 def octant_escape_delta(mask, center, current_dx, current_dy, probe_dist=48, samples=14,
                         recent_angles=None):
     """Test 16 directions (22.5° steps); return screen-space delta for the most walkable one.

@@ -23,6 +23,7 @@ from pathfinding._astar import (
 )
 from pathfinding._masks import adaptive_walkable_mask
 from pathfinding._navigation import (
+    resource_approach_delta,
     octant_escape_delta,
     path_delta_from_center,
     angle_is_blocked,

@@ -110,7 +110,7 @@ from minimap import (
 from pathfinding import (
     ray_walkability_score, choose_explore_delta, choose_recent_enemy_delta,
     choose_attack_move_delta, _a_star_next_waypoint, octant_escape_delta,
-    minimap_explore_target,
+    minimap_explore_target, resource_approach_delta,
 )
 from state import State, StuckDetector, IntentStuckDetector, ExploreHeatMap, TerrainMemory, CompanionSuppressor, SectorTracker, EnemyChaser, ExploreNavigator, ResourceTargeter, DetectionCounters, TemporalDotConfidence
 from screen_motion import ScreenMotionDetector
@@ -355,6 +355,7 @@ def run(
     last_mining_qte_press_t      = 0.0
     last_mine_adjacent_log_t     = 0.0
     last_item_nudge_log_t        = 0.0
+    last_rt_unrouted_log_t       = 0.0
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
     last_minimap_ore_t           = -1e9
@@ -1380,9 +1381,21 @@ def run(
                             )
                         if rt_target is not None and \
                                 not resource_targeter.is_close(center, MINIMAP_RESOURCE_PICKUP_DIST_PX):
-                            rt_waypoint = _a_star_next_waypoint(cached_mask, center, rt_target.pos)
-                            if rt_waypoint is not None:
-                                rt_dx, rt_dy = dot_to_screen_delta(rt_waypoint, center)
+                            # A* preferred, straight line when it finds no route.
+                            # Doing nothing here (the old behaviour) left the bot
+                            # standing still for the full 8s travel timeout in
+                            # front of an item it had detected correctly, then
+                            # re-acquiring it 12s later — with no log line saying
+                            # why. The FLEE branch below has always had this same
+                            # fallback; only this branch was missing it.
+                            rt_dx, rt_dy, rt_routed = resource_approach_delta(
+                                cached_mask, center, rt_target.pos)
+                            if not rt_routed and (now_loop - last_rt_unrouted_log_t) >= 1.0:
+                                last_rt_unrouted_log_t = now_loop
+                                print(f"[RT] no A* route to {rt_target.kind} at {rt_target.pos} "
+                                      f"(dist={dot_distance(rt_target.pos, center):.0f}px)"
+                                      f" -> straight-line approach")
+                            if abs(rt_dx) + abs(rt_dy) > 0:
                                 wasd_move(rt_dx, rt_dy, random.uniform(0.12, 0.22))
                                 sleep_interruptible(0.03)
                                 continue
