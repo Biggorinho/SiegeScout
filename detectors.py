@@ -530,24 +530,53 @@ def grab_frame_bgr(sct, full_mon):
 
 
 def is_world_map_visible(frame_bgr):
-    """Detect the fullscreen zone-selection map (purple parchment + blue nodes).
+    """Detect the fullscreen zone-selection map, in either map region.
 
-    The parchment is RICHLY saturated purple (S median ~124 on the reference
-    fixture). Hell 'Parallel Dimension' zones tint ordinary gameplay with a
-    washed-out purple haze (S median ~67-72) that covers 60%+ of the frame,
-    so a ratio gate alone false-positives on every frame there — the median
-    saturation of the purple-matched pixels is the load-bearing separator."""
+    The map spans one continuous horizontal scroll axis: the original purple
+    parchment on the left, and the sepia/nautical region added in the 2026-08
+    season to its right. Three independent gates, each measured rather than
+    guessed:
+
+    1. Parchment coverage. Purple OR sepia, because mid-scroll the frame is
+       part of each and neither alone clears the bar. Measured across a
+       full-width capture: map frames score 0.72-0.90, gameplay tops out at
+       0.19.
+    2. Parchment saturation. Hell 'Parallel Dimension' zones tint ordinary
+       gameplay with a washed-out purple haze covering 60%+ of the frame; it
+       is the median saturation (67-72 there, 109-137 on real parchment) that
+       separates them, so a coverage gate alone false-positives on every frame
+       in those zones.
+    3. The "F Choose / G Back" hint bar. Golden towns like Village of
+       Mos'Arathim are 0.60 parchment-coloured AT high saturation, so once the
+       colour gate accepts sepia they clear both gates above. The hint bar is
+       map-only chrome and scores a near-constant 0.0136 on every map frame
+       versus <=0.006 in gameplay. The upper bound rejects frames where the
+       whole strip is washed pale rather than carrying text.
+
+    The old blue-node gate is gone: at the far right of the map only a handful
+    of nodes remain on screen (ratio 0.00080, right at the old threshold),
+    while ordinary gameplay scores higher, so it never separated the two.
+    """
     if frame_bgr is None or frame_bgr.size == 0:
         return False
-    hsv        = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
-    blue_nodes = cv2.inRange(hsv, np.array([90,  80, 100]), np.array([132, 255, 255]))
-    purple_bg  = cv2.inRange(hsv, np.array([125, 35,  35]), np.array([170, 255, 220]))
-    blue_ratio   = float(np.count_nonzero(blue_nodes)) / blue_nodes.size
-    purple_ratio = float(np.count_nonzero(purple_bg))  / purple_bg.size
-    if not (blue_ratio > 0.0008 and purple_ratio > 0.35):
+
+    h, w = frame_bgr.shape[:2]
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+
+    purple = cv2.inRange(hsv, np.array([125, 35, 35]), np.array([170, 255, 220]))
+    sepia = cv2.inRange(hsv, np.array([5, 40, 40]), np.array([30, 255, 235]))
+    parchment = cv2.bitwise_or(purple, sepia)
+    if float(np.count_nonzero(parchment)) / parchment.size <= 0.45:
         return False
-    purple_sat = hsv[:, :, 1][purple_bg > 0]
-    return float(np.median(purple_sat)) >= 95.0
+    if float(np.median(hsv[:, :, 1][parchment > 0])) < 95.0:
+        return False
+
+    hint = hsv[int(h * 0.950):int(h * 0.990), int(w * 0.54):int(w * 0.99)]
+    if hint.size == 0:
+        return False
+    pale = cv2.inRange(hint, np.array([0, 0, 150]), np.array([180, 80, 255]))
+    pale_ratio = float(np.count_nonzero(pale)) / pale.size
+    return 0.008 <= pale_ratio <= 0.10
 
 
 def is_pause_menu_visible(frame_bgr):

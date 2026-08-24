@@ -121,6 +121,30 @@ def test_is_world_map_visible_detects_map_selection():
     assert is_world_map_visible(_fixture("map_selection.png")) is True
 
 
+def test_is_world_map_visible_detects_sepia_region():
+    """The 2026-08 season extended the map right into a sepia/nautical region.
+
+    The detector required purple parchment over 35% of the frame, so it went
+    False past ~960px of scroll -- 11 of 19 frames on a full-width capture.
+    That silently breaks wait_for_world_map, handle_stray_world_map and every
+    "did my click close the map?" check the moment the bot scrolls right."""
+    assert is_world_map_visible(_fixture("map_sepia_right.png")) is True
+
+
+def test_is_world_map_visible_detects_the_purple_sepia_transition():
+    """Mid-scroll the frame is part purple, part sepia, and neither alone
+    clears a 35% bar."""
+    assert is_world_map_visible(_fixture("map_transition.png")) is True
+
+
+def test_is_world_map_visible_false_in_golden_town():
+    """Village of Mos'Arathim is a heavily orange town: 0.60 of the frame
+    matches parchment colour at high saturation, so widening the colour gate
+    to accept sepia makes this a false positive on colour alone. The map's
+    "F Choose / G Back" hint bar is what separates them."""
+    assert is_world_map_visible(_fixture("safe_zone_banner.png")) is False
+
+
 def test_is_world_map_visible_false_in_safe_zone():
     """The safe zone is NOT the world map — must not be mistaken for map selection."""
     assert is_world_map_visible(_fixture("safe_zone.png")) is False
