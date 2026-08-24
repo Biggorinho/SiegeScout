@@ -20,6 +20,14 @@ DIST_DIR = ROOT / "dist"
 # they are silently left out and every ML path in the build turns itself off.
 LAZY_PACKAGES = ("onnxruntime", "rapidocr_onnxruntime")
 
+# Training-only packages. They live in the same venv because the trainers run
+# from it, but nothing the exe runs imports them -- inference is onnxruntime
+# alone. Left to itself Nuitka drags in torch's DLLs and the build balloons by
+# ~520MB, which is the difference between an exe you can post and one you
+# cannot. Excluding them is safe precisely because the shipped code path never
+# touches them.
+TRAINING_ONLY = ("torch", "torchvision", "ultralytics")
+
 
 def make_ico():
     img = Image.open(LOGO_PNG).convert("RGBA").resize((256, 256), Image.LANCZOS)
@@ -103,6 +111,8 @@ def build():
     for pkg in LAZY_PACKAGES:
         cmd[-1:-1] = [f"--include-package={pkg}",
                       f"--include-package-data={pkg}"]
+    for pkg in TRAINING_ONLY:
+        cmd[-1:-1] = [f"--nofollow-import-to={pkg}"]
     print("[build] running Nuitka — this takes a few minutes on first run")
     subprocess.run(cmd, check=True)
     print(f"[build] done -> {DIST_DIR / 'SiegeScout.exe'}")
