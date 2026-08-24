@@ -25,6 +25,8 @@ dist/
 # Local runtime outputs
 debug/
 .mcp.json
+# Written by the GUI on start/close — per-machine, not source
+settings.json
 
 # Secrets (keep out of source control)
 roboflow_key.txt
@@ -40,6 +42,9 @@ training/screen_dataset_raw/
 
 # Loose screenshots dropped in the project root
 Screenshot *.png
+
+# Roboflow export frames dropped straight into the package dir
+pathfinding/train_*.png
 
 # Loot frames staged for labeling (large, local-only)
 loot_frames/
