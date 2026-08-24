@@ -14,6 +14,8 @@ dependencies = [
     "keyboard>=0.13",
     "Pillow>=9.0",
     "httpx>=0.24",
+    "onnxruntime>=1.20",
+    "rapidocr-onnxruntime>=1.2",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +39,11 @@ py-modules = [
     "pathfinding",
     "state",
     "stats_tracker",
+    "fusion",
+    "local_inference",
+    "targeting",
+    "satanic_name",
+    "hud_ocr",
     "build",
 ]
 
