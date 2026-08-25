@@ -245,6 +245,7 @@ def cast_double_tap_skill_safe(key, attack_held, resume_left=False):
     if resume_left:
         attack_key_down()
         attack_held = True
+        sleep_interruptible(0.03)
     return attack_held
 
 
