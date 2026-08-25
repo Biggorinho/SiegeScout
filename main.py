@@ -1487,6 +1487,24 @@ def run(
                                         # blocked-terrain evidence the bot ever
                                         # gets, and it was being thrown away.
                                         terrain_memory.mark_blocked(center, rt_dx, rt_dy)
+                                        # Capture the failure, not the success.
+                                        # A session reached 5 of ~59 engaged
+                                        # loot targets an hour; these frames are
+                                        # the only record of why the other 54
+                                        # were abandoned.
+                                        debug_recorder.maybe_record(
+                                            now=now_loop, event=f"unreachable_{rt_target.kind}",
+                                            frame_bgr=frame, minimap_bgr=minimap, center=center,
+                                            enemy_dots=[], item_dots=raw_item_dots,
+                                            ore_dots=raw_ore_dots,
+                                            companion_dot=_dbg_companion, nearest_enemy=None,
+                                            resource_target=rt_target,
+                                            walkable_mask=cached_mask,
+                                            enemy_color_mask=_dbg_enemy_mask,
+                                            state_label=f"UNREACHABLE({rt_target.kind})",
+                                            hp_percent=hp,
+                                            counters_snapshot=counters.snapshot(),
+                                        )
                                         resource_targeter.mark_attempted(now_loop)
                                         rt_stuck_since = 0.0
                                         sleep_interruptible(0.03)
@@ -1709,6 +1727,20 @@ def run(
                                           f"static -> ignoring it")
                                     terrain_memory.mark_blocked(
                                         center, int(tx) - SCREEN_W // 2, int(ty) - SCREEN_H // 2)
+                                    # The on-screen tag is visible in this frame
+                                    # — the whole point is seeing WHY walking to
+                                    # it never arrived.
+                                    debug_recorder.maybe_record(
+                                        now=now_loop, event="unreachable_item_tag",
+                                        frame_bgr=frame, minimap_bgr=minimap, center=center,
+                                        enemy_dots=[], item_dots=[], ore_dots=[],
+                                        companion_dot=_dbg_companion, nearest_enemy=None,
+                                        resource_target=resource_targeter.active,
+                                        walkable_mask=cached_mask,
+                                        enemy_color_mask=_dbg_enemy_mask,
+                                        state_label="UNREACHABLE(item_tag)", hp_percent=hp,
+                                        counters_snapshot=counters.snapshot(),
+                                    )
                                     items_on_screen = []
                                     loot_click_stuck_since = 0.0
                                     last_loot_items_scan_t = now_loop

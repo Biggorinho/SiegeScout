@@ -344,8 +344,15 @@ LOOT_SWEEP_MAX_SECONDS                  = 12.0
 # ── debug snapshots + detection telemetry ────────────────────────────────
 ENABLE_DEBUG_SNAPSHOTS              = False
 DEBUG_DIR                           = "debug"
-DEBUG_PERIODIC_INTERVAL_SECONDS     = 5.0
-DEBUG_MAX_FILES                     = 500
+# Tuned for multi-hour data runs. At the old 5s periodic interval a 2h session
+# produces ~1440 periodic montages on its own, which at DEBUG_MAX_FILES=500
+# evicts every EVENT capture (stuck, unreachable, death) — precisely the frames
+# worth keeping. Periodics are ambient context; events are evidence. 20s keeps
+# ~360 periodics over 2h and leaves the budget for events.
+# Montages are ~700KB, so 1500 files is roughly 1GB — check disk before a long
+# run, and clear debug/ first.
+DEBUG_PERIODIC_INTERVAL_SECONDS     = 20.0
+DEBUG_MAX_FILES                     = 1500
 DEBUG_EVENT_RATE_LIMIT_SECONDS      = 1.5
 DEBUG_MOSAIC_PANEL_HEIGHT_PX        = 360
 
