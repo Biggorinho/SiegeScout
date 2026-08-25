@@ -228,20 +228,23 @@ def cast_movement_ability(move_dx, move_dy, key='e'):
     return False
 
 
-def cast_key3_skill_safe(attack_held, resume_left=False):
-    """Cast key 3 reliably: release attack, double tap, then resume attack."""
+def cast_double_tap_skill_safe(key, attack_held, resume_left=False):
+    """Cast a skill that needs two taps: release attack, double tap, resume.
+
+    The gap and hold are measured -- a single tap does not register reliably
+    for these, which is why this exists separately from cast_key_skill_safe.
+    """
     if attack_held:
         attack_key_up()
         attack_held = False
         sleep_interruptible(0.03)
     for i in range(KEY3_REPEAT_COUNT):
-        tap_key_uninterruptible('3', hold_time=KEY3_PRESS_HOLD_SECONDS)
+        tap_key_uninterruptible(key, hold_time=KEY3_PRESS_HOLD_SECONDS)
         if i < KEY3_REPEAT_COUNT - 1:
             time.sleep(KEY3_DOUBLE_TAP_GAP_SECONDS)
     if resume_left:
         attack_key_down()
         attack_held = True
-        sleep_interruptible(0.03)
     return attack_held
 
 
@@ -495,3 +498,19 @@ def _direction_keys(dx, dy):
     if dx > MOVE_AXIS_DEADZONE:
         keys.append('d')
     return keys or ['d']
+
+
+def cast_skill_rule(rule, attack_held, aim_dx=0.0, aim_dy=0.0):
+    """Cast one skill rule. Returns the new attack_held.
+
+    The three styles map to the three cast mechanics that already existed
+    when abilities were hardcoded, so nothing about how a key is pressed
+    changes -- only which key, and when.
+    """
+    if rule.style == "double":
+        return cast_double_tap_skill_safe(rule.key, attack_held,
+                                          resume_left=True)
+    if rule.style == "aim":
+        cast_movement_ability(aim_dx, aim_dy, key=rule.key)
+        return attack_held
+    return cast_key_skill_safe(rule.key, attack_held, resume_left=True)
