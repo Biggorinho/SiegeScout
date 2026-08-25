@@ -458,19 +458,17 @@ MAP_NODE_CLICK_Y_OFFSET_FRAC = 0.006
 # and hides the HUD entirely (verified -- the reader returns None on every
 # captured map frame). False falls back to the colour scan.
 MAP_OCR_ENABLED              = True
-# Seeking the left edge: notches per iteration and a cap on iterations.
-# 80 x 8 x 30px = 19200px, far beyond the 3918px map, so the cap only trips
-# when scrolling is not working at all.
-MAP_NORMALIZE_CHUNK_NOTCHES  = 8
+# Seeking an edge: a cap on iterations, and how long to let the map animate.
+# The notch schedule itself is derived from the map width further down.
 MAP_NORMALIZE_MAX_STEPS      = 80
 MAP_SCROLL_SETTLE_SECONDS    = 0.30
-# Sweeping the whole scroll axis for the satanic node, used when its name
-# could not be read. Measured on a real capture: the active satanic node
-# scores ~615 while ordinary nodes top out around 305, and the sepia region
-# scores NEGATIVE (its nodes are blue, which the scoring penalises). So a
-# winner must both clear the ordinary crowd outright and beat the runner-up
-# clearly -- otherwise a sweep that never saw the satanic zone would crown
-# the best ordinary node it did see.
+# Scanning the two map edges for the satanic node, used when its name could
+# not be read. Measured on a real capture: the active satanic node scores ~615
+# while ordinary nodes top out around 305, and the sepia region scores
+# NEGATIVE (its nodes are blue, which the scoring penalises). So a winner must
+# both clear the ordinary crowd outright and beat the runner-up clearly --
+# otherwise a scan that never saw the satanic zone would crown the best
+# ordinary node it did see.
 SATANIC_SCAN_MIN_SCORE       = 400.0
 SATANIC_SCAN_MIN_MARGIN      = 150.0
 
@@ -494,9 +492,11 @@ SATANIC_NODE_MIN_SCORE            = 16.0  # detection score threshold — abstra
 # The map is ONE horizontally-scrolling image 3918px wide at 1920x1080; it pans
 # 30px per wheel notch and clamps after 1997.7px. Coordinates below are in
 # WORLD space -- x on a map panned fully left -- because most zones are off
-# screen at any given scroll position. Screen position is `world_x - offset`;
-# use map_scroll.scroll_plan() rather than computing it by hand, since the
-# final notch is short and naive arithmetic misses the right-hand zones.
+# screen at any given scroll position. Screen position is `world_x - offset`,
+# and the bot only ever parks the map at one of two offsets: 0 (left edge,
+# where 40 of these zones are visible) and 1997.7 (right edge, which shows the
+# six abyss zones and nothing else). map_scroll.zone_edge_positions() turns
+# this table into that split; don't count notches by hand.
 #
 # Derived by tools/calibrate_map.py + OCR of the map's own labels, not by hand:
 # every zone's node was located in each frame it appeared in and the readings
@@ -510,6 +510,19 @@ SATANIC_NODE_MIN_SCORE            = 16.0  # detection score threshold — abstra
 WORLD_MAP_WIDTH_PX      = _px(3918)
 WORLD_MAP_MAX_SCROLL_PX = _px(1997.7)
 WORLD_MAP_PX_PER_NOTCH  = _px(30)
+
+# Panning to an edge, in wheel notches: probe, traverse, probe, traverse...
+# Arriving is only ever learned one step late, from a scroll that fails to
+# move the map, so the walk alternates. The 3-notch probe buys that proof for
+# 90ms -- and a map already parked where it belongs, which is the common case,
+# is confirmed on the very first one without touching the traverse step. The
+# traverse crosses the whole map at once; overshooting an edge simply clamps,
+# and since every step is verified against the image, a step that is too big
+# costs nothing and a dropped wheel event just adds an iteration.
+MAP_NORMALIZE_STEP_NOTCHES = (
+    3,
+    int(WORLD_MAP_MAX_SCROLL_PX / WORLD_MAP_PX_PER_NOTCH) + 3,
+)
 
 _ZONE_NODES_WORLD_REF = {
     # ── Act 1 ──────────────────────────────────────────────────

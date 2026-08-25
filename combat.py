@@ -23,8 +23,8 @@ from config import (
     DEATH_RESPAWN_CLICK_ATTEMPTS, DEATH_RESPAWN_RING_RADIUS_PX,
     DEATH_RESPAWN_POST_CLICK_CHECK_SECONDS,
     CORNER_ESCAPE_BURST_STEP_SECONDS,
-    ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX, WORLD_MAP_PX_PER_NOTCH,
-    MAP_OCR_ENABLED, MAP_NORMALIZE_CHUNK_NOTCHES, MAP_NORMALIZE_MAX_STEPS,
+    ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX,
+    MAP_OCR_ENABLED, MAP_NORMALIZE_STEP_NOTCHES, MAP_NORMALIZE_MAX_STEPS,
     MAP_SCROLL_SETTLE_SECONDS,
     SATANIC_SCAN_MIN_SCORE, SATANIC_SCAN_MIN_MARGIN,
 )
@@ -40,7 +40,20 @@ from input_control import (
 )
 
 import hud_ocr
-from map_scroll import plan_zone_click, scan_stops, scroll_to_edge
+from map_scroll import (
+    MAP_EDGE_LEFT, MAP_EDGE_RIGHT, EDGE_SCAN_MARGIN,
+    edge_offsets, edges_with_zones, plan_edge_click, scroll_to_edge,
+    zone_edge_positions,
+)
+
+# Which of the map's two edges shows each zone, and where it sits there.
+# Worked out once from the calibrated world coordinates rather than
+# recomputed per reset, so "where do I click Hellheim?" is a lookup that
+# cannot drift. At 1920x1080 this puts 40 zones at the left edge and the six
+# abyss zones at the right one.
+MAP_EDGE_OFFSETS = edge_offsets(WORLD_MAP_MAX_SCROLL_PX)
+ZONE_EDGE_POSITIONS = zone_edge_positions(
+    ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX, SCREEN_W, EDGE_SCAN_MARGIN)
 
 
 def wait_for_world_map(sct, full_mon, retry_interact_key=None, timeout_seconds=None):
@@ -378,7 +391,7 @@ def _find_satanic_node_from_fixed_nodes(frame_bgr):
     return x, y
 
 
-def score_zones_in_frame(frame_bgr, offset_px, margin=60):
+def score_zones_in_frame(frame_bgr, offset_px, margin=EDGE_SCAN_MARGIN):
     """Score every calibrated zone visible at this scroll offset.
 
     Returns ``[(score, name, screen_x, screen_y)]``, best first. Only zones
@@ -407,55 +420,73 @@ def score_zones_in_frame(frame_bgr, offset_px, margin=60):
     return ranked
 
 
-def scan_map_for_satanic_zone(sct, full_mon):
-    """Sweep the whole scroll axis looking for the glowing satanic node.
+def _decisive_satanic_zone(best_by_zone):
+    """The satanic zone, if what has been seen so far already proves it.
 
-    The map must already be at its left edge. Returns ``(name, score)``, or
-    ``(None, 0.0)`` when nothing convincing was found.
+    Ordinary nodes top out around 305 and the active satanic node scores ~615,
+    and there is only ever ONE satanic zone -- so a node that clears
+    SATANIC_SCAN_MIN_SCORE *and* beats every other zone by
+    SATANIC_SCAN_MIN_MARGIN cannot be outbid by a view not looked at yet.
+    That is what lets the scan stop the moment it has the answer instead of
+    dragging the map across its whole width first.
 
-    This exists because the satanic zone can sit in the right-hand region,
-    which the old scan could never see: it only ever looked at the opening
-    view. Scoring is only meaningful for zones actually on screen, so the
-    sweep visits overlapping stops that together cover the map.
-
-    Leaves the map scrolled wherever the sweep ended -- callers must
-    re-normalize before using any world coordinate.
+    A lone observation is not evidence: with no runner-up the margin is
+    vacuous, and a single-node view is exactly the case where the satanic node
+    is off screen. Returns ``(name, score)`` or None.
     """
-    # Best score PER ZONE. Stops overlap by design, so most zones are seen
-    # several times; ranking raw observations would let a zone be its own
+    if len(best_by_zone) < 2:
+        return None
+    ranked = sorted(best_by_zone.items(), key=lambda kv: kv[1], reverse=True)
+    (best_name, best_score), (_runner_name, runner_up) = ranked[0], ranked[1]
+    if best_score < SATANIC_SCAN_MIN_SCORE:
+        return None
+    if (best_score - runner_up) < SATANIC_SCAN_MIN_MARGIN:
+        return None
+    return best_name, best_score
+
+
+def scan_map_for_satanic_zone(sct, full_mon):
+    """Look for the glowing satanic node at the map's edges.
+
+    The map must already be parked at its LEFT edge. Returns
+    ``(name, score, edge)``, or ``(None, 0.0, edge)`` when nothing convincing
+    was found. `edge` is where the map was left standing -- MAP_EDGE_LEFT or
+    MAP_EDGE_RIGHT when that is known, None when a pan failed to arrive and
+    the offset is anybody's guess -- so the caller can click straight away
+    instead of re-normalizing on principle.
+
+    Two views cover the entire map, and the left one alone holds 40 of the 46
+    zones. So the usual scan is: score what is already on screen, recognise
+    the winner, and never touch the wheel. Only a satanic zone out in the
+    abyss region costs a trip to the right edge, which is the case the older
+    crawl across the whole scroll axis existed to handle.
+    """
+    # Best score PER ZONE. A zone seen at both edges must not become its own
     # runner-up and fail the margin check against itself.
     best_by_zone = {}
-    current = 0.0
-    for target in scan_stops(WORLD_MAP_MAX_SCROLL_PX, SCREEN_W):
-        delta = target - current
-        notches = int(round(delta / WORLD_MAP_PX_PER_NOTCH))
-        if notches > 0:
-            move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
-            mouse_scroll(-notches)
-            if not sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS):
-                return None, 0.0
-            # The map clamps, so the achieved offset is not always the target.
-            current = min(current + notches * WORLD_MAP_PX_PER_NOTCH,
-                          float(WORLD_MAP_MAX_SCROLL_PX))
+    at_edge = MAP_EDGE_LEFT
+    for edge in edges_with_zones(ZONE_EDGE_POSITIONS):
+        if edge != at_edge:
+            if _scroll_map_to_edge(sct, full_mon, edge) is None:
+                # The pan did not arrive; the map is at an unknown offset and
+                # scoring world coordinates against it would be fiction.
+                return None, 0.0, None
+            at_edge = edge
         for score, name, _sx, _sy in score_zones_in_frame(
-                grab_frame_bgr(sct, full_mon), current):
+                grab_frame_bgr(sct, full_mon), MAP_EDGE_OFFSETS[edge]):
             if score > best_by_zone.get(name, float("-inf")):
                 best_by_zone[name] = score
+        decided = _decisive_satanic_zone(best_by_zone)
+        if decided is not None:
+            return decided[0], decided[1], at_edge
 
-    if not best_by_zone:
-        return None, 0.0
-    ranked = sorted(best_by_zone.items(), key=lambda kv: kv[1], reverse=True)
-    best_name, best_score = ranked[0]
-    runner_up = ranked[1][1] if len(ranked) > 1 else float("-inf")
-    if best_score < SATANIC_SCAN_MIN_SCORE:
-        return None, 0.0
-    if (best_score - runner_up) < SATANIC_SCAN_MIN_MARGIN:
-        # Nothing stood out: most likely the satanic node was never in view,
-        # and this is just the strongest ordinary node.
-        print(f"[SAT] sweep inconclusive: '{best_name}' {best_score:.0f} vs "
-              f"runner-up {runner_up:.0f}")
-        return None, 0.0
-    return best_name, best_score
+    if len(best_by_zone) >= 2:
+        # Nothing stood out at either edge: most likely the satanic node was
+        # never in view, and this is just the strongest ordinary node.
+        ranked = sorted(best_by_zone.items(), key=lambda kv: kv[1], reverse=True)
+        print(f"[SAT] scan inconclusive: '{ranked[0][0]}' {ranked[0][1]:.0f} vs "
+              f"runner-up {ranked[1][1]:.0f}")
+    return None, 0.0, at_edge
 
 
 def _find_satanic_node(frame_bgr):
@@ -1016,9 +1047,50 @@ def _try_select_node_with_offsets(sct, full_mon, x, y, offsets):
     return False
 
 
-def _reopen_world_map_for_recenter(sct, full_mon):
-    """Close and reopen world map once to recenter map position."""
-    print("[SAT] recenter: closing and reopening world map")
+def _scroll_map_to_edge(sct, full_mon, edge):
+    """Pan the map hard against one edge, and confirm that it arrived there.
+
+    Closed loop on purpose. The number of notches needed is never actually
+    known -- a stray wheel event, or the game nudging the map on its own,
+    leaves it somewhere the bot did not put it -- and an open-loop count that
+    is wrong shifts every coordinate read afterwards by an unknown amount, so
+    the clicks land in empty map and the reset quietly fails. Panning until
+    the image stops changing is the one claim about map position that can be
+    checked, which is why both the click path and the colour scan go through
+    here rather than counting notches from wherever they think they are.
+
+    Returns the frame at the edge, or None when the edge was NOT reached --
+    in which case the caller must not read a coordinate off the map.
+    """
+    step = MAP_NORMALIZE_STEP_NOTCHES        # positive notches pan LEFT
+    if edge == MAP_EDGE_RIGHT:
+        step = tuple(-n for n in step)
+    # A traverse is seconds of wheel, so the stop key has to be able to cut it
+    # short: sleep_interruptible reports the press, and the walk checks that
+    # before starting another step.
+    stopped = []
+
+    def settle():
+        if not sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS):
+            stopped.append(True)
+
+    move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
+    frames, reason = scroll_to_edge(
+        lambda: grab_frame_bgr(sct, full_mon), mouse_scroll,
+        step=step,
+        max_steps=MAP_NORMALIZE_MAX_STEPS,
+        should_continue=lambda: not stopped,
+        settle=settle)
+    if reason != "edge":
+        print(f"[SAT] {edge} edge NOT reached ({reason}) — coordinates would "
+              f"be offset; falling back to the colour scan is safer")
+        return None
+    return frames[-1] if frames else grab_frame_bgr(sct, full_mon)
+
+
+def _reopen_world_map_for_recenter(sct, full_mon, edge=MAP_EDGE_LEFT):
+    """Close and reopen the world map, then park it against `edge`."""
+    print(f"[SAT] recenter: reopening world map, parking {edge}")
     current = grab_frame_bgr(sct, full_mon)
     # Clear a pause menu FIRST: it can sit on top of the open map (both
     # detectors true), and ESC always closes the top-most UI — the old
@@ -1044,22 +1116,9 @@ def _reopen_world_map_for_recenter(sct, full_mon):
         print("[SAT] recenter failed: world map not visible")
         return None
     # The map pans horizontally with the mouse wheel and the scroll position
-    # survives close/reopen — every calibrated coordinate is relative to the
-    # LEFT EDGE, so we have to actually arrive there. The old fixed 12-notch
-    # scroll moved 360px on a map measured at 3918px wide, which reached the
-    # edge only when the wheel happened to be near it already and silently
-    # read every coordinate at the wrong offset otherwise.
-    move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
-    frames, reason = scroll_to_edge(
-        lambda: grab_frame_bgr(sct, full_mon), mouse_scroll,
-        step=MAP_NORMALIZE_CHUNK_NOTCHES,
-        max_steps=MAP_NORMALIZE_MAX_STEPS,
-        settle=lambda: sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS))
-    if reason != "edge":
-        print(f"[SAT] left edge NOT reached ({reason}) — coordinates will be "
-              f"offset; falling back to the colour scan is safer")
-        return None
-    return frames[-1] if frames else grab_frame_bgr(sct, full_mon)
+    # survives close/reopen, so reopening it settles nothing about where it is
+    # parked — that still has to be walked to and verified.
+    return _scroll_map_to_edge(sct, full_mon, edge)
 
 
 _SAFE_ZONE_WALK_CYCLE = ((1, 0), (0, 1), (-1, 0), (0, -1))
@@ -1166,6 +1225,15 @@ def run_vote_reset_sequence(sct, full_mon, target_zone=None):
     return False
 
 
+def _plan_zone_edge_click(zone_name):
+    """Where to click a named zone, once the map is parked at its edge."""
+    if zone_name is None:
+        return None
+    return plan_edge_click(
+        zone_name, ZONE_EDGE_POSITIONS,
+        click_y_bias=-int(SCREEN_H * MAP_NODE_CLICK_Y_OFFSET_FRAC))
+
+
 def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None,
                             satanic_hint=None):
     """Find and click a zone node on an already-open world map.
@@ -1181,39 +1249,46 @@ def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None,
     if frame is None:
         frame = grab_frame_bgr(sct, full_mon)
 
-    normalized = _reopen_world_map_for_recenter(sct, full_mon)
+    # ── named zone: park at its edge and click it ───────────────────────────
+    # One path for both an explicitly chosen zone and the satanic zone, since
+    # the HUD gives us the latter by name. Each zone belongs to exactly one
+    # edge, so knowing the name means knowing where to park -- go straight
+    # there rather than normalizing left and then travelling back across the
+    # map, which is what the old notch-counting plan did for every abyss zone.
+    wanted = target_zone or satanic_hint
+    plan = _plan_zone_edge_click(wanted)
+    park_at = plan[0] if plan is not None else MAP_EDGE_LEFT
+
+    normalized = _reopen_world_map_for_recenter(sct, full_mon, edge=park_at)
     scan_frame = normalized if normalized is not None else grab_frame_bgr(sct, full_mon)
 
-    # ── named zone: scroll to its calibrated node and click it ──────────────
-    # One path for both an explicitly chosen zone and the satanic zone, since
-    # the HUD gives us the latter by name. Coordinates are world-space, so the
-    # zone may be off screen at the left edge and has to be scrolled into view.
-    wanted = target_zone or satanic_hint
     if wanted is None and normalized is not None:
-        # No name from the HUD: sweep the map for the glowing node. This is
-        # what lets a satanic zone in the right-hand region be found at all.
-        wanted, _sweep_score = scan_map_for_satanic_zone(sct, full_mon)
+        # No name from the HUD: look for the glowing node at each edge. This
+        # is what lets a satanic zone in the abyss region be found at all.
+        wanted, scan_score, found_at = scan_map_for_satanic_zone(sct, full_mon)
         if wanted is not None:
-            print(f"[SAT] sweep picked '{wanted}' (score {_sweep_score:.0f})")
-        # The sweep scrolled away from the origin; world coordinates need it.
-        normalized = _reopen_world_map_for_recenter(sct, full_mon)
-        scan_frame = normalized if normalized is not None else scan_frame
+            print(f"[SAT] scan picked '{wanted}' (score {scan_score:.0f}) "
+                  f"at the {found_at} edge")
+        plan = _plan_zone_edge_click(wanted)
+        park_at = plan[0] if plan is not None else MAP_EDGE_LEFT
+        if found_at != park_at:
+            # Either the scan lost track of the map (found_at is None) or the
+            # zone is clicked from the other edge. Either way, park properly
+            # before anything reads a coordinate off this map.
+            normalized = _scroll_map_to_edge(sct, full_mon, park_at)
+            scan_frame = normalized if normalized is not None else scan_frame
+        else:
+            # Already standing at the right edge for the click: the scan ends
+            # where it found the node, so there is nothing left to pan.
+            normalized = grab_frame_bgr(sct, full_mon)
+            scan_frame = normalized
 
     if wanted is not None and normalized is not None:
-        plan = plan_zone_click(
-            wanted, ZONE_NODES_WORLD, WORLD_MAP_MAX_SCROLL_PX,
-            screen_w=SCREEN_W, px_per_notch=WORLD_MAP_PX_PER_NOTCH,
-            click_y_bias=-int(SCREEN_H * MAP_NODE_CLICK_Y_OFFSET_FRAC))
         if plan is None:
             print(f"[RST] no calibrated coordinate for '{wanted}' – colour scan")
         else:
-            notches, cx, cy = plan
-            if notches:
-                move_cursor_to(SCREEN_W // 2, SCREEN_H // 2)
-                mouse_scroll(-notches)          # negative = wheel down = right
-                if not sleep_interruptible(MAP_SCROLL_SETTLE_SECONDS + 0.15):
-                    return False
-            print(f"[RST] zone '{wanted}': {notches} notches right -> ({cx}, {cy})")
+            _edge, cx, cy = plan
+            print(f"[RST] zone '{wanted}': {_edge} edge -> ({cx}, {cy})")
             r = SATANIC_NODE_CLICK_RING_RADIUS_PX
             offsets = [(0, 0), (0, -r), (r, 0), (0, r), (-r, 0),
                        (r // 2, -r // 2), (-r // 2, -r // 2)]
@@ -1225,8 +1300,7 @@ def pick_zone_from_open_map(sct, full_mon, frame=None, target_zone=None,
             if not is_world_map_visible(grab_frame_bgr(sct, full_mon)):
                 return True
             print(f"[RST] '{wanted}' clicks missed – trying the colour scan")
-            # We scrolled away from the origin, and the colour scan below reads
-            # coordinates relative to the left edge. Put it back first.
+            # The colour scan reads coordinates relative to the left edge.
             if _reopen_world_map_for_recenter(sct, full_mon) is None:
                 return False
             scan_frame = grab_frame_bgr(sct, full_mon)

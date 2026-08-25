@@ -1,13 +1,14 @@
-"""Scrolling the world map to a known edge.
+"""Parking the world map at a known edge, and reading zones off it.
 
-The map pans 30px per wheel notch and is far wider than the screen, so
-"scroll a fixed number of notches to reach the edge" is a guess that silently
-fails: combat._reopen_world_map_for_recenter scrolls 12 notches (360px) to
-"normalize to leftmost", which cannot reach the edge from most positions, and
-every fixed node coordinate is then read at the wrong offset.
+Counting wheel notches is a guess the bot cannot check: the map can be moved
+by something other than the bot -- a stray wheel event, the game itself -- and
+then every coordinate is read at an offset nobody knows, so the clicks land in
+empty map and the reset silently fails.
 
-The edge announces itself -- panning stops changing the image -- so these
-tests drive the walk against a synthetic map wider than its viewport.
+The edge announces itself instead -- panning a clamped map stops changing the
+image -- and the map's two edges between them show every zone. These tests
+drive the walk against a synthetic map wider than its viewport, then pin the
+left/right split the real coordinates produce.
 """
 
 import os
@@ -96,139 +97,162 @@ def test_abort_signal_stops_the_walk():
     assert m.offset > 0                # stopped before reaching the edge
 
 
-# ── turning a world coordinate into a scroll plan ────────────────────────────
-from map_scroll import scroll_plan  # noqa: E402
+def test_a_short_first_step_confirms_an_edge_without_a_full_traverse():
+    """The common case: the map is already parked where it needs to be, and
+    proving that must not cost a trip across the whole map."""
+    m = FakeMap(offset=0)
+    scrolled = []
+    frames, reason = scroll_to_edge(m.grab,
+                                    lambda n: (scrolled.append(n), m.scroll(n)),
+                                    step=(3, 60), max_steps=50)
+    assert reason == "edge"
+    assert scrolled == [3], f"traversed the map to confirm an edge: {scrolled}"
 
-# Calibrated 2026-08-24: the map is 3918px wide, so it pans 1997.7px before
-# clamping. That is NOT a whole number of 30px notches, so the final notch is
-# short -- a plan that assumes notches * 30 lands the far-right zones wrong.
+
+def test_the_schedule_alternates_probe_and_traverse():
+    """Arriving is only learned from a scroll that fails to move the map, so
+    the proof must not cost another traverse."""
+    m = FakeMap(offset=WORLD_W - VIEW_W)          # 1280px away, 43 notches
+    scrolled = []
+    frames, reason = scroll_to_edge(m.grab,
+                                    lambda n: (scrolled.append(n), m.scroll(n)),
+                                    step=(3, 60), max_steps=50)
+    assert reason == "edge"
+    assert m.offset == 0
+    assert scrolled == [3, 60, 3], scrolled
+
+
+def test_overshooting_the_edge_is_harmless():
+    """A step wider than the whole map just clamps -- which is what makes the
+    big step in the schedule safe."""
+    m = FakeMap(offset=WORLD_W - VIEW_W)
+    frames, reason = scroll_to_edge(m.grab, m.scroll, step=(1, 999),
+                                    max_steps=50)
+    assert reason == "edge"
+    assert m.offset == 0
+
+
+# ── which edge shows which zone ─────────────────────────────────────────────
+from map_scroll import (  # noqa: E402
+    MAP_EDGE_LEFT, MAP_EDGE_RIGHT, edge_offsets, edges_with_zones,
+    plan_edge_click, zone_edge_positions,
+)
+
+# Calibrated 2026-08-24: the map is 3918px wide and pans 1997.7px before
+# clamping, so the left view (world x 0..1920) and the right view
+# (1997.7..3917.7) cover it between them.
 MAX_SCROLL = 1997.7
 SCREEN_W = 1920
+MARGIN = 60
+
+TABLE = {
+    "Chilling Lake": (104, 411),        # left edge, no scrolling needed
+    "Forgotten Caves": (1764, 459),     # last of the left-edge zones
+    "Boreal Island": (2363, 486),       # first of the abyss zones
+    "Abyss Realm": (3605, 447),         # far right, where the map clamps
+}
 
 
-def test_zone_already_on_screen_needs_no_scrolling():
-    notches, screen_x = scroll_plan(104, MAX_SCROLL)
-    assert notches == 0
-    assert screen_x == 104
+def test_near_zones_are_read_at_the_left_edge_unchanged():
+    edge, x, y = zone_edge_positions(TABLE, MAX_SCROLL)["Chilling Lake"]
+    assert edge == MAP_EDGE_LEFT
+    assert (x, y) == (104, 411)
 
 
-def test_zone_is_centred_when_the_map_can_reach_it():
-    notches, screen_x = scroll_plan(2660, MAX_SCROLL)
-    assert abs(screen_x - SCREEN_W / 2) <= 30      # within one notch of centre
-    assert notches > 0
+def test_abyss_zones_are_read_at_the_right_edge():
+    """Their world x is off screen at the left edge; at the right edge the
+    map has panned 1997.7px, so they land inside the frame."""
+    edge, x, y = zone_edge_positions(TABLE, MAX_SCROLL)["Abyss Realm"]
+    assert edge == MAP_EDGE_RIGHT
+    assert abs(x - 1607) <= 1
+    assert y == 447
 
 
-def test_far_right_zone_accounts_for_the_short_final_notch():
-    # Abyss Realm sits at world x=3605. The map cannot centre it: it clamps at
-    # 1997.7px, leaving the zone at 1607 -- exactly where OCR observed it.
-    notches, screen_x = scroll_plan(3605, MAX_SCROLL)
-    assert abs(screen_x - 1607.3) < 1.5
-
-
-def test_never_returns_negative_notches():
-    for wx in (0, 50, 104, 960, 1919):
-        notches, _ = scroll_plan(wx, MAX_SCROLL)
-        assert notches >= 0, wx
-
-
-def test_every_calibrated_zone_lands_safely_on_screen():
-    """The real table must be reachable -- a zone that plans off-screen is a
-    click into empty map."""
+def test_every_calibrated_zone_is_visible_at_one_of_the_two_edges():
+    """A zone visible at neither edge could never be scanned or clicked."""
     import json
     import os
     path = os.path.join(os.path.dirname(__file__), "fixtures",
                         "zone_table.json")
-    if not os.path.exists(path):
-        import pytest
-        pytest.skip("zone table fixture not generated yet")
-    table = json.load(open(path, encoding="utf-8"))
-    for name, (wx, wy) in table.items():
-        notches, screen_x = scroll_plan(wx, MAX_SCROLL)
-        assert 60 <= screen_x <= SCREEN_W - 60, f"{name} plans to x={screen_x}"
+    table = {n: tuple(v) for n, v in
+             json.load(open(path, encoding="utf-8")).items()}
+    positions = zone_edge_positions(table, MAX_SCROLL, SCREEN_W, MARGIN)
+    missing = [n for n in table if n not in positions]
+    assert missing == [], f"zones no edge shows: {missing}"
 
 
-def test_scroll_offset_never_exceeds_the_map():
-    notches, screen_x = scroll_plan(99999, MAX_SCROLL)
-    assert notches * 30 <= MAX_SCROLL + 30
-    assert screen_x >= 99999 - MAX_SCROLL - 1
+def test_positions_land_clear_of_the_screen_borders():
+    import json
+    import os
+    path = os.path.join(os.path.dirname(__file__), "fixtures",
+                        "zone_table.json")
+    table = {n: tuple(v) for n, v in
+             json.load(open(path, encoding="utf-8")).items()}
+    for name, (_edge, x, _y) in zone_edge_positions(
+            table, MAX_SCROLL, SCREEN_W, MARGIN).items():
+        assert MARGIN <= x <= SCREEN_W - MARGIN, f"{name} at x={x}"
 
 
-# ── turning a zone name into a click plan ───────────────────────────────────
-from map_scroll import plan_zone_click  # noqa: E402
-
-TABLE = {
-    "Chilling Lake": (104, 411),        # left edge, no scrolling needed
-    "Abyss Realm": (3605, 447),         # far right, scroll clamps
-    "Volcanic Island": (2660, 189),     # mid-right, centrable
-}
+def test_a_zone_off_both_edges_is_omitted_rather_than_clamped():
+    """Better no answer than a click into empty map."""
+    positions = zone_edge_positions({"Nowhere": (1950, 400)}, MAX_SCROLL)
+    assert "Nowhere" not in positions
 
 
-def test_left_edge_zone_is_clicked_without_scrolling():
-    plan = plan_zone_click("Chilling Lake", TABLE, MAX_SCROLL)
-    assert plan is not None
-    notches, cx, cy = plan
-    assert notches == 0
-    assert (cx, cy) == (104, 411)
+def test_a_zone_visible_at_both_edges_prefers_the_left():
+    """Deterministic, and it never travels for a node already on screen."""
+    edge, _x, _y = zone_edge_positions(
+        {"Middle": (1000, 400)}, max_scroll_px=200)["Middle"]
+    assert edge == MAP_EDGE_LEFT
 
 
-def test_far_right_zone_uses_the_clamped_offset():
-    notches, cx, cy = plan_zone_click("Abyss Realm", TABLE, MAX_SCROLL)
-    assert notches > 0
-    assert abs(cx - 1607) <= 2          # not 3605 - notches*30, which is off
+def test_a_map_that_cannot_scroll_has_one_edge():
+    assert edge_offsets(0) == {MAP_EDGE_LEFT: 0.0, MAP_EDGE_RIGHT: 0.0}
+
+
+# ── turning a zone name into a click ────────────────────────────────────────
+POSITIONS = zone_edge_positions(TABLE, MAX_SCROLL)
+
+
+def test_the_click_plan_names_the_edge_to_park_at():
+    edge, cx, cy = plan_edge_click("Abyss Realm", POSITIONS)
+    assert edge == MAP_EDGE_RIGHT
+    assert abs(cx - 1607) <= 1          # not 3605, which is off screen
     assert cy == 447
 
 
 def test_unknown_zone_returns_none():
-    assert plan_zone_click("Atlantis", TABLE, MAX_SCROLL) is None
+    assert plan_edge_click("Atlantis", POSITIONS) is None
 
 
 def test_click_y_bias_compensates_for_the_click_helpers_own_offset():
     """_click_node_and_choose adds ~6.5px before clicking; passing a negative
     bias makes the real click land on the node centre instead of its lower rim
     (median node radius is only 9.6px)."""
-    _, _, cy = plan_zone_click("Chilling Lake", TABLE, MAX_SCROLL,
-                               click_y_bias=-7)
+    _, _, cy = plan_edge_click("Chilling Lake", POSITIONS, click_y_bias=-7)
     assert cy == 411 - 7
 
 
 def test_plan_is_integral_so_it_can_be_clicked():
     for name in TABLE:
-        notches, cx, cy = plan_zone_click(name, TABLE, MAX_SCROLL)
-        assert isinstance(notches, int) and isinstance(cx, int) and isinstance(cy, int)
+        _edge, cx, cy = plan_edge_click(name, POSITIONS)
+        assert isinstance(cx, int) and isinstance(cy, int)
 
 
-# ── scroll stops that cover the whole map ───────────────────────────────────
-from map_scroll import scan_stops  # noqa: E402
+# ── which edges a colour scan has to visit ──────────────────────────────────
+
+def test_a_scan_visits_the_left_edge_first():
+    assert edges_with_zones(POSITIONS)[0] == MAP_EDGE_LEFT
 
 
-def test_stops_start_at_the_left_edge():
-    assert scan_stops(MAX_SCROLL, SCREEN_W)[0] == 0
+def test_a_scan_visits_both_edges_when_zones_live_at_both():
+    assert edges_with_zones(POSITIONS) == (MAP_EDGE_LEFT, MAP_EDGE_RIGHT)
 
 
-def test_stops_end_at_the_right_edge():
-    assert scan_stops(MAX_SCROLL, SCREEN_W)[-1] == int(MAX_SCROLL)
+def test_an_edge_with_no_zones_is_not_worth_the_trip():
+    left_only = zone_edge_positions({"Chilling Lake": (104, 411)}, MAX_SCROLL)
+    assert edges_with_zones(left_only) == (MAP_EDGE_LEFT,)
 
 
-def test_stops_cover_every_calibrated_zone():
-    """A zone visible at no stop can never be found by the colour scan --
-    which is exactly the gap when the satanic zone sits off to the right."""
-    import json
-    import os
-    path = os.path.join(os.path.dirname(__file__), "fixtures", "zone_table.json")
-    table = json.load(open(path, encoding="utf-8"))
-    stops = scan_stops(MAX_SCROLL, SCREEN_W)
-    margin = 60
-    for name, (wx, _wy) in table.items():
-        seen = any(margin <= wx - o <= SCREEN_W - margin for o in stops)
-        assert seen, f"{name} at world x={wx} is visible at no stop {stops}"
-
-
-def test_consecutive_stops_overlap():
-    """Without overlap a node could fall in the seam between two views."""
-    stops = scan_stops(MAX_SCROLL, SCREEN_W)
-    for a, b in zip(stops, stops[1:]):
-        assert b - a < SCREEN_W, f"gap between {a} and {b}"
-
-
-def test_a_map_narrower_than_the_screen_needs_one_stop():
-    assert scan_stops(0, SCREEN_W) == [0]
+def test_an_empty_table_still_scans_where_it_stands():
+    assert edges_with_zones({}) == (MAP_EDGE_LEFT,)

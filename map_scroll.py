@@ -1,20 +1,19 @@
-"""Pan the world map to a known edge, by detecting when it stops moving.
+"""Pan the world map to one of its two edges, and say what is visible there.
 
-The zone-select map is far wider than the screen and pans exactly 30px per
-wheel notch (measured by phase correlation across a 40-notch capture: -30.00
-px/notch, zero vertical drift). Because every calibrated node coordinate is
-expressed relative to the left edge, reaching that edge reliably is the
-foundation everything else stands on.
+The zone-select map is 3918px wide, the screen shows 1920 of it, and it pans
+1997.7px before clamping. Two positions therefore show the whole thing: parked
+hard LEFT you see world x 0..1920 -- 40 of the 46 zones -- and parked hard
+RIGHT you see 1997.7..3917.7, which is the abyss region and nothing else. There
+is no third view worth visiting.
 
-Scrolling a fixed number of notches cannot do that. combat's
-_reopen_world_map_for_recenter scrolls 12 notches -- 360px -- to "normalize to
-leftmost", which only works if the map happened to be near the left already.
-The map is wide enough that a right-scrolled wheel leaves the bot reading
-every fixed coordinate at the wrong offset, silently.
-
-The edge announces itself instead: once the map is clamped, panning further
-stops changing the image. That is a fact about the map, not a guess about its
-width, so it keeps working when the next season widens it again.
+That is why everything here is expressed as an *edge* rather than a scroll
+offset. An offset has to be counted out in wheel notches and believed
+afterwards; the bot has no way to check it, so a map that scrolled on its own
+-- a stray wheel event, the game nudging it -- leaves every coordinate wrong by
+an unknown amount and the clicks land in empty map. An edge announces itself
+instead: once the map is clamped, panning further stops changing the image.
+Reaching an edge is a fact that can be verified, so the coordinates read there
+are too.
 
 The walk takes injected `grab`/`scroll` callables so it is testable without a
 game attached.
@@ -30,6 +29,14 @@ STABLE_MAD = 3.0
 
 # Measured pan distance for one wheel notch, at 1920x1080.
 PX_PER_NOTCH = 30
+
+# Keep nodes this far from the screen edges when deciding what an edge shows:
+# the scoring patch has a 14px radius, and a node clipped by the frame border
+# scores badly enough to be missed.
+EDGE_SCAN_MARGIN = 60
+
+MAP_EDGE_LEFT = "left"
+MAP_EDGE_RIGHT = "right"
 
 
 def frame_delta(a, b):
@@ -47,7 +54,14 @@ def scroll_to_edge(grab, scroll, step, max_steps=200, on_capture=None,
         grab: () -> frame.
         scroll: (notches) -> None. Positive notches pan LEFT, matching
             input_control.mouse_scroll.
-        step: notches per iteration; sign chooses the direction to walk.
+        step: notches per iteration -- either one number, or a schedule of
+            them, cycled. A schedule is what makes the walk cheap, because
+            arriving at an edge is only ever learned one step late: something
+            has to be scrolled that fails to move the map. Alternating
+            ``(probe, traverse)`` pays a few notches for that proof instead of
+            another map's width, and the traverse step can be as wide as the
+            whole map because overshooting an edge simply clamps.
+            The sign of every value chooses the direction to walk.
         max_steps: safety cap, so a map that never settles cannot spin forever.
         on_capture: optional (index, frame) callback, for saving frames.
         should_continue: optional () -> bool, checked before each iteration so
@@ -60,6 +74,9 @@ def scroll_to_edge(grab, scroll, step, max_steps=200, on_capture=None,
         moving, "max_steps" when the cap was hit -- in which case the edge was
         NOT reached and the caller must not assume it was -- or "aborted".
     """
+    schedule = (step,) if isinstance(step, (int, float)) else tuple(step)
+    if not schedule:
+        raise ValueError("scroll_to_edge needs at least one step")
     frames = []
     prev = None
     for i in range(max_steps):
@@ -72,76 +89,70 @@ def scroll_to_edge(grab, scroll, step, max_steps=200, on_capture=None,
         if frame_delta(prev, frame) <= stable_mad:
             return frames, "edge"
         prev = frame
-        scroll(step)
+        scroll(schedule[i % len(schedule)])
         if settle is not None:
             settle()
     return frames, "max_steps"
 
 
-def scroll_plan(world_x, max_scroll_px, screen_w=1920, px_per_notch=PX_PER_NOTCH):
-    """Plan how far to scroll right to put a world coordinate on screen.
+def edge_offsets(max_scroll_px):
+    """How far the map has panned at each edge, in world pixels."""
+    return {MAP_EDGE_LEFT: 0.0, MAP_EDGE_RIGHT: max(0.0, float(max_scroll_px))}
 
-    Zone coordinates are stored in *world* space -- their x on a map panned
-    fully left -- because the map is 3918px wide and most zones are off screen
-    at any one time. Screen position is then simply ``world_x - offset``.
 
-    Returns ``(notches_right, screen_x)``: how many wheel-down notches to send
-    from the left edge, and where the zone will then be on screen.
+def zone_edge_positions(zone_table, max_scroll_px, screen_w=1920,
+                        margin=EDGE_SCAN_MARGIN):
+    """Work out, once, which edge shows each zone and where it sits there.
 
-    Two clamps matter and both are easy to get wrong:
+    Returns ``{name: (edge, screen_x, screen_y)}``. Zone coordinates are stored
+    in *world* space -- their x on a map panned fully left -- so this is just
+    ``world_x - edge_offset``, but doing it up front turns every later question
+    ("where do I click Hellheim?", "which edges does a colour scan have to
+    visit?") into a lookup instead of arithmetic that can drift.
 
-    * The map stops at `max_scroll_px`, so the right-most zones cannot be
-      centred and simply sit wherever the clamp leaves them.
-    * `max_scroll_px` is not a whole number of notches (1997.7 vs 30px), so
-      the final notch is short. Computing screen position as
-      ``notches * px_per_notch`` puts the far-right zones ~12px off, which is
-      most of the click tolerance.
+    A zone visible at both edges is filed under the left one, so the bot has a
+    single answer per zone and never travels for a node it can already see. A
+    zone visible at neither is omitted rather than clamped to an edge: callers
+    must fall back instead of clicking a guessed position.
     """
-    desired = world_x - screen_w / 2.0
-    desired = max(0.0, min(desired, float(max_scroll_px)))
-    notches = int(round(desired / px_per_notch))
-    actual = min(notches * px_per_notch, float(max_scroll_px))
-    return notches, world_x - actual
+    offsets = edge_offsets(max_scroll_px)
+    positions = {}
+    for name, (world_x, world_y) in zone_table.items():
+        for edge in (MAP_EDGE_LEFT, MAP_EDGE_RIGHT):
+            screen_x = world_x - offsets[edge]
+            if margin <= screen_x <= screen_w - margin:
+                positions[name] = (edge, int(round(screen_x)),
+                                   int(round(world_y)))
+                break
+    return positions
 
 
-def plan_zone_click(zone_name, zone_table, max_scroll_px, screen_w=1920,
-                    px_per_notch=PX_PER_NOTCH, click_y_bias=0):
-    """Plan the click for a named zone: ``(notches_right, click_x, click_y)``.
+def plan_edge_click(zone_name, edge_positions, click_y_bias=0):
+    """Plan the click for a named zone: ``(edge, click_x, click_y)``.
 
-    Returns None for a zone with no calibrated coordinate, so callers can fall
-    back rather than click a guessed position.
+    Returns None for a zone with no calibrated position, so callers can fall
+    back rather than click a guess.
 
     `click_y_bias` offsets the returned y. combat's _click_node_and_choose
     adds ~0.6% of screen height before clicking, and the median map node has a
     radius of only 9.6px, so passing the negative of that lands the real click
     on the node centre instead of its lower rim.
     """
-    entry = zone_table.get(zone_name)
+    entry = edge_positions.get(zone_name)
     if entry is None:
         return None
-    world_x, world_y = entry
-    notches, screen_x = scroll_plan(world_x, max_scroll_px, screen_w,
-                                    px_per_notch)
-    return notches, int(round(screen_x)), int(round(world_y + click_y_bias))
+    edge, screen_x, screen_y = entry
+    return edge, int(screen_x), int(round(screen_y + click_y_bias))
 
 
-def scan_stops(max_scroll_px, screen_w=1920, margin=60):
-    """Scroll offsets that together show every part of the map, with overlap.
+def edges_with_zones(edge_positions):
+    """Edges a colour scan has to visit, left first.
 
-    The colour scan can only score nodes that are actually on screen, so a
-    scan that never leaves the left edge cannot find a satanic zone sitting in
-    the right-hand region -- it is simply not in frame. These stops walk the
-    whole axis instead.
-
-    Consecutive stops advance by less than a screen width so no node falls in
-    a seam, and `margin` keeps nodes away from the screen edges where they are
-    clipped and score badly.
+    A scan can only score nodes that are actually on screen, so it has to
+    visit both edges when zones live at both -- that is what lets a satanic
+    zone in the abyss region be found at all. It also means an edge that hosts
+    no zone is never worth the trip.
     """
-    max_scroll_px = max(0.0, float(max_scroll_px))
-    if max_scroll_px <= 0:
-        return [0]
-    step = max(1, screen_w - 2 * margin)
-    stops = list(range(0, int(max_scroll_px), step))
-    if stops[-1] != int(max_scroll_px):
-        stops.append(int(max_scroll_px))
-    return stops
+    present = {edge for edge, _x, _y in edge_positions.values()}
+    visiting = tuple(e for e in (MAP_EDGE_LEFT, MAP_EDGE_RIGHT) if e in present)
+    return visiting or (MAP_EDGE_LEFT,)
