@@ -107,6 +107,11 @@ HP_FLEE_THRESHOLD            = 0.30
 HP_RESUME_THRESHOLD          = 0.50
 HP_ZERO_DEAD_THRESHOLD       = 0.02
 HP_ZERO_RESPAWN_COOLDOWN_SECONDS = 3.0
+# How long HP must stay below the flee threshold before actually fleeing. A
+# single frame used to be enough, and a single frame is what a spell effect over
+# the HP bar produces. Short enough to still run from real danger, long enough
+# that one bad read does not flip the state machine.
+HP_FLEE_CONFIRM_SECONDS      = 0.6
 HP_BAR_MISSING_GRACE_SECONDS = 3.5
 HEALTH_POTION_KEY            = '1'
 HEALTH_POTION_COOLDOWN_SECONDS = 4.0

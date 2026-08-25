@@ -11,7 +11,7 @@ import stats_tracker as _st
 
 from config import (
     SCREEN_W, SCREEN_H,
-    HP_FLEE_THRESHOLD, HP_RESUME_THRESHOLD,
+    HP_FLEE_THRESHOLD, HP_RESUME_THRESHOLD, HP_FLEE_CONFIRM_SECONDS,
     HP_ZERO_DEAD_THRESHOLD, HP_ZERO_RESPAWN_COOLDOWN_SECONDS,
     HP_BAR_MISSING_GRACE_SECONDS,
     HEALTH_POTION_KEY, HEALTH_POTION_COOLDOWN_SECONDS,
@@ -333,6 +333,7 @@ def run(
     last_attack_sweep_t          = time.time()
     last_movement_ability_t      = 0.0
     hp_zero_since                = 0.0
+    hp_low_since                 = 0.0
     hp_bar_missing_until         = 0.0
     stuck_no_enemy_count         = 0
     last_stuck_count_t           = 0.0
@@ -394,7 +395,7 @@ def run(
         nonlocal zone_had_attack, stuck_no_enemy_count, hard_stuck_since
         nonlocal corner_escape_attempts, no_enemy_frames, hp_bar_missing_until
         nonlocal zone_started_t, zone_opening_rightclick_pending, state, state_start
-        nonlocal explore_pause_until, death_screen_frames, hp_zero_since
+        nonlocal explore_pause_until, death_screen_frames, hp_zero_since, hp_low_since
         nonlocal explore_dx, explore_dy, last_explore_target
         nonlocal last_any_enemy_seen_t
         nonlocal escape_committed_until, escape_dx, escape_dy
@@ -422,6 +423,7 @@ def run(
         explore_pause_until           = zone_transition_until
         death_screen_frames           = 0
         hp_zero_since                 = 0.0
+        hp_low_since                  = 0.0
         last_any_enemy_seen_t         = 0.0
         explore_dx, explore_dy        = random_explore_delta()
         last_explore_target           = None
@@ -1034,8 +1036,34 @@ def run(
                     0.55 if (_pkt_t and _pkt_t.available
                              and _st.BUFF_CLAIRVOYANCE in _pkt_t.active_buffs) else 1.0
                 )
-                if (hp or 0.0) < _flee_thr and state != State.FLEE:
-                    print(f"HP {(hp or 0.0):.0%} -> FLEE")
+                # Two guards, because a single frame used to flip the state and
+                # a single frame is exactly what a combat effect over the HP bar
+                # produces. A 78-minute run logged 265 "HP 0%" against 3 real
+                # deaths, and one zone burned 27 MINUTES — 35% of the session —
+                # oscillating `HP 0% -> FLEE` / `HP 99% -> EXPLORE` every ~6s.
+                # Each flip counted as combat, so the 22s no-combat reset never
+                # fired and the bot only escaped by genuinely dying.
+                #
+                # 1. Ignore near-zero readings entirely. 0% followed by 99% is
+                #    not survivable damage, it is a misread; a REAL death is
+                #    owned by the hp_zero_sustained path above, which requires
+                #    1.5s of sustain plus a death screen on a static scene.
+                # 2. Require the low reading to persist. The death path already
+                #    corroborates before acting; the flee path guarded nothing,
+                #    so the dangerous action was careful and the disruptive one
+                #    was not.
+                _hp_now = hp if hp is not None else 1.0
+                if HP_ZERO_DEAD_THRESHOLD < _hp_now < _flee_thr:
+                    if hp_low_since == 0.0:
+                        hp_low_since = now_loop
+                else:
+                    hp_low_since = 0.0
+
+                if hp_low_since > 0.0 \
+                        and (now_loop - hp_low_since) >= HP_FLEE_CONFIRM_SECONDS \
+                        and state != State.FLEE:
+                    print(f"HP {_hp_now:.0%} for "
+                          f"{now_loop - hp_low_since:.1f}s -> FLEE")
                     state       = State.FLEE
                     state_start = time.time()
 
