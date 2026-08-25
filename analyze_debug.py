@@ -24,6 +24,27 @@ _KV_RE = re.compile(r"(\w+)=(\d+)")
 
 _SESSION_MARKER = "===== Bot session started"
 
+# Diagnostic signals added 2026-08-24/25 while fixing six "branch continues past
+# its own safety net" bugs. Each one exists because the failure it names was
+# previously invisible, so a report that ignores them hides exactly the problems
+# worth watching over a long run. Counted as rates per hour, which is what
+# actually compares across sessions of different lengths.
+_SIGNALS = {
+    "explore_stall_loot_tag":   "exit=loot_item_click",
+    "camera_static_stuck":      "world not scrolling",
+    "resource_static":          "world static approaching",
+    "mining_static_drop":       "world static while approaching",
+    "unreachable_giveup":       "not reachable after",
+    "octant_escape":            "[STUCK] octant-escape",
+    "chase_timeout":            "[CHASE] TIMEOUT",
+    "stuck_enemy_armed":        "[STUCK-ENEMY]",
+    "loot_label_click":         "[LOOT] item label on screen",
+    "mine_click":               "[MINE] click ore",
+    "esc_backoff":              "ESC failed to clear the pause menu",
+    "menu_esc":                 "[MENU]",
+    "hp_zero":                  "HP 0%",
+}
+
 
 def parse_cnt_line(line: str) -> dict | None:
     """Return {timestamp, zone_seconds, counters: {name: int, ...}} or None."""
@@ -65,12 +86,18 @@ def parse_log_lines(lines: list[str]) -> dict:
     stucks: list[dict] = []
     vote_resets: list[dict] = []
     vote_reset_failures: list[dict] = []
+    vote_reset_blocked: list[dict] = []
     hp_events: list[dict] = []
+    signals: dict[str, int] = {k: 0 for k in _SIGNALS}
     session_start_ts: str | None = None
     session_end_ts: str | None = None
 
     pending_zone_name: str | None = None
     pending_zone_start_ts: str | None = None
+    # The zone the bot is travelling TO. "[RST] zone 'X'" is the click that
+    # STARTS the trip, and the [CNT] immediately after it closes the zone being
+    # LEFT — so X names the next zone, not the one being summarised.
+    next_zone_name: str | None = None
 
     for raw in lines:
         m = _TS_RE.match(raw)
@@ -85,10 +112,23 @@ def parse_log_lines(lines: list[str]) -> dict:
             session_start_ts = ts
         session_end_ts = ts
 
+        for key, marker in _SIGNALS.items():
+            if marker in rest:
+                signals[key] += 1
+
+        # Packet-sourced and authoritative for the zone we are IN.
         if "Zone entered:" in rest:
             pending_zone_name = rest.split("Zone entered:", 1)[1].strip()
             pending_zone_start_ts = ts
             continue
+
+        # Fallback name source: the reset click names its destination. Only
+        # used when no packet arrived — a live session logged zero
+        # "Zone entered:" lines and every zone came out "(unknown)", which
+        # makes the problem-zone section unusable.
+        zm = re.search(r"\[RST\] zone '([^']+)'", rest)
+        if zm:
+            next_zone_name = zm.group(1)
 
         cnt = parse_cnt_line(raw)
         if cnt is not None:
@@ -99,8 +139,10 @@ def parse_log_lines(lines: list[str]) -> dict:
                 "duration_seconds": cnt["zone_seconds"],
                 "counters": cnt["counters"],
             })
-            pending_zone_name = None
-            pending_zone_start_ts = None
+            # The trip that just started determines the NEXT zone's name.
+            pending_zone_name = next_zone_name
+            pending_zone_start_ts = ts if next_zone_name else None
+            next_zone_name = None
             continue
 
         if "[STUCK] octant-escape was=" in rest:
@@ -109,16 +151,30 @@ def parse_log_lines(lines: list[str]) -> dict:
                 stucks.append({"timestamp": ts, "octant_degrees": int(angle_m.group(1))})
             continue
 
-        if "[DEATH]" in rest:
+        # "[DEATH" not "[DEATH]": the HP-corroborated path prints [DEATH-HP],
+        # which the exact-bracket match missed, reporting 0 deaths for a session
+        # that had one.
+        if "[DEATH" in rest:
             deaths.append({"timestamp": ts, "line": rest})
             continue
 
-        # Vote-reset success: every successful reset ends with the bot
-        # clicking a node on the world map, which prints exactly once per
-        # successful attempt. The older "Vote reset triggered" form is kept
-        # for backward-compat with logs from earlier bot versions.
-        if "[RST] satanic node picked at" in rest or "Vote reset triggered" in rest:
+        # Vote-reset success. A reset ends by clicking a node on the world map,
+        # and that click prints one of two forms depending on how the zone was
+        # chosen: "[RST] satanic node picked at" for the colour scan, or
+        # "[RST] zone 'X': N notches right" for a named/calibrated target. Only
+        # the first was counted, so a session with 58 zone-targeted resets and 2
+        # colour-scan ones reported "2". "Vote reset triggered" is kept for
+        # logs from older bot versions.
+        if ("[RST] satanic node picked at" in rest
+                or "[RST] zone '" in rest
+                or "Vote reset triggered" in rest):
             vote_resets.append({"timestamp": ts})
+            continue
+
+        # Not a failure — the game refusing while enemies are near. Worth its
+        # own line because a high rate means lost farming time, not a bug.
+        if "vote reset unavailable" in rest:
+            vote_reset_blocked.append({"timestamp": ts})
             continue
 
         # Each failed retry prints two lines ("...failed after all retries"
@@ -138,7 +194,9 @@ def parse_log_lines(lines: list[str]) -> dict:
         "stucks": stucks,
         "vote_resets": vote_resets,
         "vote_reset_failures": vote_reset_failures,
+        "vote_reset_blocked": vote_reset_blocked,
         "hp_events": hp_events,
+        "signals": signals,
         "session_start_ts": session_start_ts,
         "session_end_ts": session_end_ts,
     }
@@ -263,14 +321,63 @@ def render_report(events: dict, snapshots: list[dict],
     end_ts = events.get("session_end_ts")
     runtime = _duration_human(_iso_seconds_between(start_ts, end_ts))
 
+    blocked = events.get("vote_reset_blocked", [])
+    signals = events.get("signals", {})
+    runtime_s = _iso_seconds_between(start_ts, end_ts)
+    hours = runtime_s / 3600.0
+
     aggs = aggregate_counters(zones)
     lines: list[str] = []
     lines.append(f"# SiegeScout Session Report — {start_ts} → {end_ts}\n")
     lines.append(
         f"**Runtime:** {runtime}  |  **Zones:** {len(zones)}  |  "
         f"**Deaths:** {len(deaths)}  |  "
-        f"**Vote-resets:** {len(vote_resets)} ok / {len(vote_reset_failures)} failed\n"
+        f"**Vote-resets:** {len(vote_resets)} ok / {len(vote_reset_failures)} failed "
+        f"/ {len(blocked)} blocked\n"
     )
+    if zones:
+        mean_zone = sum(z["duration_seconds"] for z in zones) / len(zones)
+        lines.append(
+            f"**Zones/hour:** {len(zones) / hours:.1f}  |  "
+            f"**Mean zone:** {_duration_human(mean_zone)}  |  "
+            f"**Deaths/hour:** {len(deaths) / hours:.1f}\n"
+            if hours > 0 else ""
+        )
+
+    # Rates per hour, so long and short sessions are comparable. Each of these
+    # names a failure that was invisible until it was logged; a rate climbing
+    # between runs is the earliest signal that something regressed.
+    if signals and hours > 0:
+        lines.append("\n## Behaviour Signals (per hour)\n")
+        lines.append("| Signal | Count | Per hour |")
+        lines.append("|---|---|---|")
+        for key in sorted(signals, key=lambda k: -signals[k]):
+            n = signals[key]
+            if n == 0:
+                continue
+            lines.append(f"| {key} | {n} | {n / hours:.1f} |")
+        if not any(signals.values()):
+            lines.append("| (none seen) | 0 | 0.0 |")
+        lines.append("")
+
+    # Loot is the reason the bot exists; its own section rather than buried.
+    loot_keys = ("loot_label_click", "mine_click", "unreachable_giveup",
+                 "explore_stall_loot_tag", "resource_static")
+    if any(signals.get(k) for k in loot_keys):
+        lines.append("\n## Loot & Mining\n")
+        lines.append(f"- Item labels clicked: **{signals.get('loot_label_click', 0)}**")
+        lines.append(f"- Ore clicks: **{signals.get('mine_click', 0)}**")
+        lines.append(f"- Targets written off as unreachable: "
+                     f"**{signals.get('unreachable_giveup', 0)}**")
+        lines.append(f"- Frames stalled on a loot tag: "
+                     f"**{signals.get('explore_stall_loot_tag', 0)}**")
+        clicked = signals.get("loot_label_click", 0)
+        gave_up = signals.get("unreachable_giveup", 0)
+        if clicked + gave_up:
+            lines.append(
+                f"- Reach rate: **{100.0 * clicked / (clicked + gave_up):.0f}%** "
+                f"of engaged targets were actually reached\n"
+            )
 
     # Counter summary table.
     lines.append("\n## Counter Summary\n")
