@@ -57,3 +57,6 @@ yolo11n.pt
 
 # World-map calibration captures (large, regenerable via tools/calibrate_map.py)
 calibration/
+
+# Zone spawn survey captures (large, regenerable via tools/survey_zone_spawns.py)
+spawn_survey/
