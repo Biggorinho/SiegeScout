@@ -45,7 +45,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import mss  # noqa: E402
 import combat  # noqa: E402
+import hud_ocr  # noqa: E402
 from config import SCREEN_W, SCREEN_H, ZONE_NODES_WORLD  # noqa: E402
+from detectors import grab_frame_bgr  # noqa: E402
 from input_control import (  # noqa: E402
     attack_key_down, attack_key_up, release_all_inputs, sleep_interruptible,
     wasd_move, wasd_move_and_attack,
@@ -107,6 +109,26 @@ def _safe_name(zone):
     return re.sub(r"[^A-Za-z0-9]+", "_", zone).strip("_")
 
 
+def _verify_zone(sct, full_mon, expected):
+    """Where did we actually land? Returns (matched, seen_name).
+
+    `matched` is None when the HUD could not be read. This is not paranoia:
+    run_vote_reset_sequence falls back to the satanic colour scan when a zone
+    click fails, which SILENTLY changes the destination. Without this check a
+    failed click files another zone's spawn under `expected`, and per-zone
+    correlation — the entire output of this tool — is quietly wrong.
+    """
+    try:
+        frame = grab_frame_bgr(sct, full_mon)
+        name, _ratio, _raw = hud_ocr.read_current_zone(frame, list(ZONE_NODES_WORLD))
+    except Exception as exc:
+        print(f"[survey]   zone check failed ({type(exc).__name__}: {exc})")
+        return None, None
+    if name is None:
+        return None, None
+    return name == expected, name
+
+
 def _travel_to(sct, full_mon, zone, clear_seconds, retries):
     """Vote-reset into `zone`. Returns (True | reason, aborted).
 
@@ -161,6 +183,15 @@ def survey(out_dir, zones, passes, minimap_mode, clear_seconds, reset_retries):
 
                 if not sleep_interruptible(SETTLE_SECONDS):
                     return manifest, True
+
+                matched, seen = _verify_zone(sct, full_mon, zone)
+                if matched is False:
+                    print(f"[survey]   LANDED IN '{seen}', not '{zone}' "
+                          f"-- discarding (reset fell back to the satanic scan)")
+                    continue
+                if matched is None:
+                    print("[survey]   zone unreadable -- capturing as UNVERIFIED")
+
                 stamp = int(time.time() * 1000)
                 zdir = os.path.join(out_dir, _safe_name(zone))
                 os.makedirs(zdir, exist_ok=True)
@@ -183,6 +214,7 @@ def survey(out_dir, zones, passes, minimap_mode, clear_seconds, reset_retries):
                     "zone": zone, "pass": p, "stamp": stamp,
                     "dir": _safe_name(zone), "shots": shots,
                     "settle_seconds": SETTLE_SECONDS,
+                    "verified": bool(matched),
                 })
                 with open(manifest_path, "w") as f:
                     json.dump(manifest, f, indent=2)
@@ -213,11 +245,26 @@ def analyse(out_dir):
         print(f"no manifest at {manifest_path} -- run a survey first")
         return
     manifest = json.load(open(manifest_path))
+
+    # Records from before zone verification existed have no "verified" key.
+    # Treat them as unverified rather than as trusted: they predate the check
+    # that catches the reset falling back to the satanic scan, so any of them
+    # could be another zone's spawn filed under this name.
+    legacy = [r for r in manifest if "verified" not in r]
+    unverified = [r for r in manifest if r.get("verified") is False]
+    usable = [r for r in manifest if r.get("verified") is True]
+    if legacy or unverified:
+        print(f"excluded: {len(legacy)} pre-verification, "
+              f"{len(unverified)} unverified (zone could not be read)")
+    if not usable:
+        print("no verified visits yet — re-run the survey to collect some")
+        return
+
     by_zone = defaultdict(list)
-    for rec in manifest:
+    for rec in usable:
         by_zone[rec["zone"]].append(rec)
 
-    print(f"{len(manifest)} visits across {len(by_zone)} zones\n")
+    print(f"{len(usable)} verified visits across {len(by_zone)} zones\n")
     print(f"{'zone':<28}{'visits':>7}{'radius':>9}{'same-zone corr':>18}")
     print("-" * 62)
     summary = []

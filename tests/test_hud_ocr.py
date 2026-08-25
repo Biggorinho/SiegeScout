@@ -203,6 +203,60 @@ def test_satanic_line_found_but_zone_name_unknown():
     assert hud_ocr.last_failure_reason == "no_zone_match"
 
 
+# ── current zone (what read_satanic_zone deliberately avoids) ───────────────
+
+
+@needs_ocr
+def test_current_zone_is_the_one_the_player_stands_in():
+    """The exact inverse of test_does_not_return_the_zone_the_player_is_standing_in.
+
+    hud_prison_dungeon.png shows "Dawn's Chapel" in cream as the current zone,
+    with the magenta satanic line "Prison Dungeon" directly below it.
+    """
+    name, ratio, raw = hud_ocr.read_current_zone(
+        _fixture("hud_prison_dungeon.png"), ZONES + ["Dawn's Chapel"])
+    assert name == "Dawn's Chapel", f"raw={raw!r}"
+
+
+@needs_ocr
+def test_current_zone_and_satanic_zone_disagree_on_the_same_frame():
+    """They answer different questions and must not be interchangeable."""
+    frame = _fixture("hud_prison_dungeon.png")
+    cands = ZONES + ["Dawn's Chapel"]
+    current, _, _ = hud_ocr.read_current_zone(frame, cands)
+    satanic, _, _ = hud_ocr.read_satanic_zone(frame, cands)
+    assert current == "Dawn's Chapel"
+    assert satanic == "Prison Dungeon"
+
+
+@needs_ocr
+def test_current_zone_handles_the_satanic_prefix_variant():
+    """Standing IN the satanic zone: top line reads "Satanic <name>"."""
+    name, ratio, raw = hud_ocr.read_current_zone(
+        _fixture("hud_satanic_cream_in_zone.png"), ZONES)
+    assert name == "The Highland Mines", f"raw={raw!r}"
+
+
+def test_current_zone_prefers_the_topmost_matching_line():
+    """Line order decides, not OCR result order."""
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+
+    def ocr(img):
+        low = [[10, 90], [200, 90], [200, 110], [10, 110]]
+        high = [[10, 5], [200, 5], [200, 25], [10, 25]]
+        # Deliberately returns the LOWER line first.
+        return ([[low, "Misty Swamp", 0.9], [high, "Steam Train", 0.9]], 0.01)
+
+    name, _, _ = hud_ocr.read_current_zone(frame, ZONES, ocr=ocr)
+    assert name == "Steam Train"
+
+
+def test_current_zone_missing_frame_is_fail_soft():
+    name, ratio, _ = hud_ocr.read_current_zone(None, ZONES)
+    assert name is None and ratio == 0.0
+    assert hud_ocr.last_failure_reason == "no_frame"
+
+
 @needs_ocr
 def test_rapidocr_components_resolve_by_bare_name():
     """Guards the frozen-build failure, as far as a venv test can.

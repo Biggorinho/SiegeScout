@@ -144,6 +144,62 @@ def _magenta_fraction(hsv, box):
     return float(np.count_nonzero(mask)) / float(mask.size)
 
 
+def read_current_zone(frame, candidates, ocr=None):
+    """Resolve the zone the player is STANDING IN, as ``(name, ratio, raw_text)``.
+
+    A different question from read_satanic_zone, which hunts the magenta line
+    further down the HUD. The current zone is the TOP line of the strip:
+
+        Dawn's Chapel          cream   <- this one
+        (skull)Prison Dungeon  MAGENTA <- read_satanic_zone returns this
+        Hell (2)               cream
+        Safe Zone              green
+
+    When the player is inside the satanic zone the top line reads
+    "Satanic <name>" instead, and the current zone is still <name> — so a
+    satanic prefix is not a reason to reject the line.
+
+    Exists because a tool that asks to travel to a specific zone cannot trust
+    that it arrived: run_vote_reset_sequence falls back to the satanic colour
+    scan when a zone click fails, which silently changes the destination.
+    Returns ``(None, 0.0, None)`` when it cannot be read; the reason lands in
+    last_failure_reason.
+    """
+    global last_failure_reason
+    if frame is None or getattr(frame, "size", 0) == 0:
+        return _fail("no_frame")
+    try:
+        strip = hud_strip(frame)
+        if strip.size == 0:
+            return _fail("empty_strip")
+        engine = ocr if ocr is not None else _default_engine()
+        result = engine(strip)
+    except Exception as exc:
+        return _fail(f"ocr_engine_error: {type(exc).__name__}: {exc}")
+
+    lines = result[0] if isinstance(result, tuple) else result
+    if not lines:
+        return _fail("ocr_found_no_text")
+
+    # Topmost first: the current zone is the line nearest the top of the strip.
+    entries = []
+    for entry in lines:
+        try:
+            box, text = entry[0], entry[1]
+        except (TypeError, IndexError):
+            continue
+        pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+        entries.append((float(pts[:, 1].min()), text))
+    entries.sort(key=lambda e: e[0])
+
+    for _top, text in entries:
+        name, ratio = satanic_name.match_zone_name(text, candidates)
+        if name is not None:
+            last_failure_reason = None
+            return name, ratio, text
+    return _fail("no_zone_match")
+
+
 def read_satanic_zone(frame, candidates, ocr=None, min_magenta=_MIN_MAGENTA):
     """Resolve the satanic zone from a frame as ``(name, ratio, raw_text)``.
 
