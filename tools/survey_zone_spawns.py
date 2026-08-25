@@ -50,7 +50,7 @@ from config import SCREEN_W, SCREEN_H, ZONE_NODES_WORLD  # noqa: E402
 from detectors import grab_frame_bgr, is_death_screen  # noqa: E402
 from input_control import (  # noqa: E402
     attack_key_down, attack_key_up, release_all_inputs, sleep_interruptible,
-    wasd_move, wasd_move_and_attack,
+    wasd_move_and_attack,
 )
 from minimap import get_minimap_region  # noqa: E402
 
@@ -224,20 +224,27 @@ def survey(out_dir, zones, passes, minimap_mode, clear_seconds, reset_retries):
                 zdir = os.path.join(out_dir, _safe_name(zone))
                 os.makedirs(zdir, exist_ok=True)
 
+                # Attack throughout. The scan is the longest stretch the bot
+                # spends in a hostile zone without fighting back — eight legs
+                # plus captures — and walking it defenceless is what killed the
+                # character about a dozen times in a ten-minute run, wrecking
+                # two earlier surveys outright.
                 shots = []
-                for leg_i in range(len(SCAN_LEGS) + 1):
-                    name = f"{stamp}_leg{leg_i:02d}.png"
-                    cv2.imwrite(os.path.join(zdir, name), _grab_minimap(sct, minimap_mode))
-                    shots.append(name)
-                    if leg_i == len(SCAN_LEGS):
-                        break
-                    dx, dy, secs = SCAN_LEGS[leg_i]
-                    wasd_move(dx, dy, secs)
-                    if not sleep_interruptible(0.25):
-                        release_all_inputs()
-                        return manifest, True
-
-                release_all_inputs()
+                attack_key_down()
+                try:
+                    for leg_i in range(len(SCAN_LEGS) + 1):
+                        name = f"{stamp}_leg{leg_i:02d}.png"
+                        cv2.imwrite(os.path.join(zdir, name), _grab_minimap(sct, minimap_mode))
+                        shots.append(name)
+                        if leg_i == len(SCAN_LEGS):
+                            break
+                        dx, dy, secs = SCAN_LEGS[leg_i]
+                        wasd_move_and_attack(dx, dy, duration=secs, aim_dx=dx, aim_dy=dy)
+                        if not sleep_interruptible(0.25):
+                            return manifest, True
+                finally:
+                    attack_key_up()
+                    release_all_inputs()
                 manifest.append({
                     "zone": zone, "pass": p, "stamp": stamp,
                     "dir": _safe_name(zone), "shots": shots,
