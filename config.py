@@ -324,6 +324,16 @@ RT_STATIC_GIVEUP_SECONDS                = 2.0
 # obstruction in the same iteration. Must exceed the chase move duration or the
 # escape is pointless; kept just above it so combat still feels responsive.
 ATTACK_ESCAPE_COMMIT_SECONDS            = 1.5
+
+# Pause-menu ESC repeat limiter. The auto-ESC path sends ESC, re-checks, and
+# sends a second ESC if the menu still looks up — an even number, so a menu that
+# survives both just toggles forever. Observed live: ~25s wedged, twice in one
+# run, each right after "vote reset unavailable". Backing off is the safe
+# failure here; this is the code path behind the Save&Exit incident, so the
+# answer to "ESC is not working" must never be "send more ESC".
+PAUSE_ESC_MAX_ATTEMPTS                  = 3
+PAUSE_ESC_LOOP_WINDOW_SECONDS           = 8.0
+PAUSE_ESC_SUPPRESS_SECONDS              = 12.0
 # Once standing on/near a minimap-targeted resource, items and ore are both
 # collected by pressing F; ore needs a second F this many seconds later to mine.
 RESOURCE_PICKUP_SECOND_F_DELAY_SECONDS  = 0.5

@@ -64,6 +64,9 @@ from config import (
     MINIMAP_RESOURCE_PICKUP_DIST_PX,
     RT_STATIC_GIVEUP_SECONDS,
     ATTACK_ESCAPE_COMMIT_SECONDS,
+    PAUSE_ESC_MAX_ATTEMPTS,
+    PAUSE_ESC_LOOP_WINDOW_SECONDS,
+    PAUSE_ESC_SUPPRESS_SECONDS,
     MINIMAP_RESOURCE_VISIT_MEMORY_SECONDS,
     MINIMAP_RESOURCE_MAX_TRAVEL_SECONDS,
     MINIMAP_RESOURCE_SPOT_MATCH_RADIUS_PX,
@@ -361,9 +364,14 @@ def run(
     last_motion_stuck_log_t      = 0.0
     last_rt_stuck_log_t          = 0.0
     rt_stuck_since               = 0.0
+    last_rt_stuck_seen_t         = -1e9
     loot_click_stuck_since       = 0.0
+    last_loot_click_seen_t       = -1e9
     attack_escape_until          = 0.0
     attack_escape_delta          = None
+    pause_esc_attempts           = 0
+    last_pause_esc_t             = -1e9
+    pause_esc_suppressed_until   = 0.0
     explore_exit                 = "init"
     last_mining_seen_log_t       = 0.0
     last_qte_log_t               = 0.0
@@ -800,7 +808,30 @@ def run(
                     menu_escape_cooldown_until = now_loop + 0.8
                     options_menu_frames = 0
                     continue
-                if pause_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL and menu_screen_static:
+                if pause_menu_frames >= MENU_CONFIRM_FRAMES_LOCAL and menu_screen_static \
+                        and now_loop >= pause_esc_suppressed_until:
+                    # Repeat limiter. Each pass sends ESC, waits, and sends a
+                    # second ESC if the menu still looks up — an even number, so
+                    # a persistent detection just toggles the menu open/closed
+                    # forever. A live run spent ~25s doing exactly that, twice,
+                    # both times right after `vote reset unavailable`.
+                    # Containment only: WHY the menu survives both ESCs is not
+                    # established, and this deliberately does not invent new ESC
+                    # behaviour — this is the code path behind the 2026-07-18
+                    # Save&Exit incident, where extra menu keypresses exited the
+                    # game. Backing off is the safe failure.
+                    if (now_loop - last_pause_esc_t) > PAUSE_ESC_LOOP_WINDOW_SECONDS:
+                        pause_esc_attempts = 0
+                    last_pause_esc_t = now_loop
+                    pause_esc_attempts += 1
+                    if pause_esc_attempts > PAUSE_ESC_MAX_ATTEMPTS:
+                        pause_esc_suppressed_until = now_loop + PAUSE_ESC_SUPPRESS_SECONDS
+                        pause_esc_attempts = 0
+                        print(f"[MENU] ESC failed to clear the pause menu "
+                              f"{PAUSE_ESC_MAX_ATTEMPTS}x -> backing off "
+                              f"{PAUSE_ESC_SUPPRESS_SECONDS:.0f}s instead of toggling it")
+                        pause_menu_frames = 0
+                        continue
                     print("[MENU] pause menu detected (paused) — ESC")
                     auto_esc_ignore_until      = time.time() + 1.0
                     tap_key('esc', hold_time=0.12)
@@ -1439,6 +1470,14 @@ def run(
                                               f"{rt_target.pos} -> jump, then drop if still stuck")
                                     maybe_jump_with_movement(rt_dx, rt_dy, last_jump_t,
                                                              force_aim=True)
+                                    # A gap means this branch lapsed and the
+                                    # recorded start is stale — it only updates
+                                    # while the branch runs, and it runs many
+                                    # times a second when active. Without this a
+                                    # timer started minutes ago is still counting.
+                                    if (now_loop - last_rt_stuck_seen_t) > 1.0:
+                                        rt_stuck_since = 0.0
+                                    last_rt_stuck_seen_t = now_loop
                                     if rt_stuck_since == 0.0:
                                         rt_stuck_since = now_loop
                                     elif (now_loop - rt_stuck_since) >= RT_STATIC_GIVEUP_SECONDS:
@@ -1650,6 +1689,13 @@ def run(
                             # getting there, so stop feeding this branch and let
                             # the normal stuck handling below run.
                             if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
+                                # See the rt_approach branch: a gap means this
+                                # lapsed and the start is stale. A live run
+                                # reported "not reachable after 65.7s static"
+                                # because the timer had been sitting unused.
+                                if (now_loop - last_loot_click_seen_t) > 1.0:
+                                    loot_click_stuck_since = 0.0
+                                last_loot_click_seen_t = now_loop
                                 if loot_click_stuck_since == 0.0:
                                     loot_click_stuck_since = now_loop
                                 elif (now_loop - loot_click_stuck_since) >= RT_STATIC_GIVEUP_SECONDS:
