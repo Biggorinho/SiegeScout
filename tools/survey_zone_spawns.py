@@ -47,7 +47,7 @@ import mss  # noqa: E402
 import combat  # noqa: E402
 import hud_ocr  # noqa: E402
 from config import SCREEN_W, SCREEN_H, ZONE_NODES_WORLD  # noqa: E402
-from detectors import grab_frame_bgr  # noqa: E402
+from detectors import grab_frame_bgr, is_death_screen  # noqa: E402
 from input_control import (  # noqa: E402
     attack_key_down, attack_key_up, release_all_inputs, sleep_interruptible,
     wasd_move, wasd_move_and_attack,
@@ -109,6 +109,26 @@ def _safe_name(zone):
     return re.sub(r"[^A-Za-z0-9]+", "_", zone).strip("_")
 
 
+def _handle_death(sct, full_mon):
+    """Respawn if the character is dead. Returns True if a death was handled.
+
+    Without this the survey does not stop when the character dies -- it keeps
+    calling the reset flow, which sees no pause menu and fires blind clicks at
+    the death screen. A live run ended exactly that way, burning the rest of
+    the zone list on a corpse.
+    """
+    try:
+        frame = grab_frame_bgr(sct, full_mon)
+    except Exception:
+        return False
+    if not is_death_screen(frame):
+        return False
+    print("[survey]   DEAD -- respawning")
+    combat.attempt_respawn(sct, full_mon)
+    sleep_interruptible(3.0)
+    return True
+
+
 def _verify_zone(sct, full_mon, expected):
     """Where did we actually land? Returns (matched, seen_name).
 
@@ -138,11 +158,19 @@ def _travel_to(sct, full_mon, zone, clear_seconds, retries):
     """
     reason = "unknown"
     for attempt in range(retries + 1):
+        # Check FIRST, not just between retries: the character may have died
+        # during the previous zone's spawn-clearing sweep.
+        if _handle_death(sct, full_mon):
+            reason = "died"
         if attempt > 0:
             print(f"[survey]   blocked ({reason}) -- clearing spawn area, "
                   f"retry {attempt}/{retries}")
             if not _clear_spawn_area(clear_seconds):
                 return "aborted", True
+            if _handle_death(sct, full_mon):
+                # Clearing killed us; skip this zone rather than blind-clicking
+                # a death screen for the rest of the run.
+                return "died while clearing", False
         try:
             result = combat.run_vote_reset_sequence(sct, full_mon, target_zone=zone)
         except Exception as exc:
