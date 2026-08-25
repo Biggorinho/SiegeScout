@@ -304,6 +304,12 @@ MINING_APPROACH_JUMP_DIST_PX          = _px(250)
 MINING_APPROACH_MOVE_MIN_SECONDS      = 0.12
 MINING_APPROACH_MOVE_MAX_SECONDS      = 0.22
 MINING_SESSION_MEMORY_SECONDS         = 2.6
+# After an on-screen ore is written off as unreachable, stop scanning for a
+# moment. Clearing the target alone does not work — the next scan re-finds the
+# same node and the bot loops give-up/re-acquire (observed: 10 cycles in 2s on
+# one node). Long enough for the bot to move somewhere the node is no longer
+# the nearest candidate.
+MINING_UNREACHABLE_COOLDOWN_SECONDS   = 6.0
 RESOURCE_COLLECT_START_DELAY_SECONDS  = 18.0
 
 LOOT_ITEMS_SCAN_INTERVAL_SECONDS      = 0.10

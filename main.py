@@ -63,6 +63,7 @@ from config import (
     ENABLE_MINIMAP_RESOURCE_TARGETING,
     MINIMAP_RESOURCE_PICKUP_DIST_PX,
     RT_STATIC_GIVEUP_SECONDS,
+    MINING_UNREACHABLE_COOLDOWN_SECONDS,
     ATTACK_ESCAPE_COMMIT_SECONDS,
     PAUSE_ESC_MAX_ATTEMPTS,
     PAUSE_ESC_LOOP_WINDOW_SECONDS,
@@ -356,6 +357,7 @@ def run(
     rightclick_busy_until        = 0.0
     last_explore_target          = None
     last_mining_scan_t           = 0.0
+    mining_scan_blocked_until    = 0.0
     last_mining_click_t          = 0.0
     last_mining_interact_t       = 0.0
     last_mining_qte_press_t      = 0.0
@@ -1627,9 +1629,11 @@ def run(
                     minimap_ore_recent = (now_loop - last_minimap_ore_t) <= 8.0
                     if not minimap_ore_recent:
                         mining_target_screen = None
-                    mining_should_scan = minimap_ore_recent and (
-                        (now_loop - last_mining_scan_t) >= MINING_SCAN_INTERVAL_SECONDS
-                        or mining_target_screen is None
+                    mining_should_scan = (
+                        minimap_ore_recent
+                        and now_loop >= mining_scan_blocked_until
+                        and ((now_loop - last_mining_scan_t) >= MINING_SCAN_INTERVAL_SECONDS
+                             or mining_target_screen is None)
                     )
                     ores_on_screen = []
                     if mining_should_scan:
@@ -1683,6 +1687,15 @@ def run(
                                 terrain_memory.mark_blocked(center, mdx, mdy)
                                 mining_target_screen = None
                                 mining_active_until = 0.0
+                                # Clearing the target is not enough: the very
+                                # next scan finds the SAME ore still on screen
+                                # and re-acquires it, so the bot gives up and
+                                # un-gives-up forever. A live run did this ten
+                                # times in two seconds on one node at 306px.
+                                # Suppress the screen scan briefly so the
+                                # decision actually sticks.
+                                mining_scan_blocked_until = (
+                                    now_loop + MINING_UNREACHABLE_COOLDOWN_SECONDS)
                                 sleep_interruptible(0.03)
                                 explore_exit = "mine_static_drop"
                                 continue
