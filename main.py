@@ -1483,6 +1483,10 @@ def run(
                                     elif (now_loop - rt_stuck_since) >= RT_STATIC_GIVEUP_SECONDS:
                                         print(f"[RT] {rt_target.kind} unreachable after "
                                               f"{now_loop - rt_stuck_since:.1f}s static -> dropping")
+                                        # Proven-unreachable: the strongest
+                                        # blocked-terrain evidence the bot ever
+                                        # gets, and it was being thrown away.
+                                        terrain_memory.mark_blocked(center, rt_dx, rt_dy)
                                         resource_targeter.mark_attempted(now_loop)
                                         rt_stuck_since = 0.0
                                         sleep_interruptible(0.03)
@@ -1630,6 +1634,7 @@ def run(
                             if _cfg.ENABLE_SCREEN_MOTION_STUCK and screen_motion.is_static():
                                 print(f"[MINE] world static while approaching ore at "
                                       f"{mdist:.0f}px -> dropping unreachable target")
+                                terrain_memory.mark_blocked(center, mdx, mdy)
                                 mining_target_screen = None
                                 mining_active_until = 0.0
                                 sleep_interruptible(0.03)
@@ -1702,6 +1707,8 @@ def run(
                                     print(f"[LOOT] item tag at ({int(tx)},{int(ty)}) not "
                                           f"reachable after {now_loop - loot_click_stuck_since:.1f}s "
                                           f"static -> ignoring it")
+                                    terrain_memory.mark_blocked(
+                                        center, int(tx) - SCREEN_W // 2, int(ty) - SCREEN_H // 2)
                                     items_on_screen = []
                                     loot_click_stuck_since = 0.0
                                     last_loot_items_scan_t = now_loop
