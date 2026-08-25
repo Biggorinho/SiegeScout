@@ -164,3 +164,84 @@ def rules_from_settings(data):
     if any(sw in data or cd in data for sw, cd, *_ in _LEGACY_ROWS):
         return _migrate_legacy(data)
     return default_rules()
+
+
+# Firing the buff within this long after a jump wastes the cast. Carried over
+# verbatim from main.run's inline guard.
+POST_JUMP_DELAY = 0.42
+
+
+@dataclass(frozen=True)
+class LoopState:
+    """What the frame loop knows, at the moment skills are considered."""
+    now: float
+    in_combat: bool
+    enemy_visible: bool
+    hp: "float | None"          # None when the HP bar was unreadable
+    zone_entered: bool
+    moving: bool
+    aim_dx: float
+    aim_dy: float
+    busy_until: float
+    last_jump_t: float
+
+
+def _trigger_holds(rule, state):
+    if rule.trigger == "always":
+        return True
+    if rule.trigger == "in_combat":
+        return state.in_combat or state.enemy_visible
+    if rule.trigger == "enemy_visible":
+        return state.enemy_visible
+    if rule.trigger == "hp_below":
+        # None means the HP bar was unreadable this frame. Guessing here
+        # fires a panic skill at full health.
+        return state.hp is not None and (state.hp * 100.0) < rule.hp_percent
+    if rule.trigger == "zone_entry":
+        return state.zone_entered
+    if rule.trigger == "while_moving":
+        return state.moving
+    return False
+
+
+class SkillRunner:
+    """Owns the per-rule interval timers and answers what should fire now.
+
+    Stateful on purpose: these timers used to be three nonlocals in
+    main.run's loop, and keeping them next to the rules is what let those
+    disappear. `due()` advances the timer for every rule it returns, matching
+    the old behaviour where the timer moved on the attempt rather than on a
+    confirmed cast.
+    """
+
+    def __init__(self, rules, post_jump_delay=POST_JUMP_DELAY):
+        self._post_jump_delay = post_jump_delay
+        self.set_rules(rules)
+
+    def set_rules(self, rules):
+        self._rules = list(rules)
+        self._next_t = {}
+
+    def due(self, state):
+        """Rules that should fire this tick, in list order.
+
+        A rule blocked by a guard is NOT marked as fired -- being suppressed
+        is not the same as having cast, and burning the interval on a
+        swallowed cast is how a skill silently stops going off.
+        """
+        if state.now < state.busy_until:
+            return []
+        firing = []
+        for index, rule in enumerate(self._rules):
+            if not rule.enabled:
+                continue
+            if state.now < self._next_t.get(index, 0.0):
+                continue
+            if not _trigger_holds(rule, state):
+                continue
+            if rule.style == "tap" and \
+                    (state.now - state.last_jump_t) < self._post_jump_delay:
+                continue
+            self._next_t[index] = state.now + rule.interval
+            firing.append(rule)
+        return firing
