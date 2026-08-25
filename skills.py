@@ -116,3 +116,51 @@ def rules_to_json(rules):
         }
         for r in rules
     ]
+
+
+# The three abilities that were hardcoded before rules existed, and the
+# legacy settings.json keys that configured them. Migration exists so an
+# existing customer's setup survives the upgrade unchanged.
+_LEGACY_ROWS = (
+    ("rc_sw", "rc_cd", "e", "tap", 10.0, "in_combat"),
+    ("k3_sw", "k3_cd", "3", "double", 50.0, "enemy_visible"),
+    ("mv_sw", "mv_cd", "r", "aim", 3.0, "while_moving"),
+)
+
+
+def default_rules():
+    """The three shipped abilities, for a settings file that has neither
+    a rule list nor the legacy keys."""
+    return [
+        SkillRule(key=key, style=style, interval=interval, trigger=trigger)
+        for _sw, _cd, key, style, interval, trigger in _LEGACY_ROWS
+    ]
+
+
+def _migrate_legacy(data):
+    rules = []
+    for sw_key, cd_key, key, style, interval, trigger in _LEGACY_ROWS:
+        try:
+            cd = max(MIN_INTERVAL, float(data.get(cd_key, interval)))
+        except (TypeError, ValueError):
+            cd = interval
+        rules.append(SkillRule(key=key, style=style, interval=cd,
+                               trigger=trigger,
+                               enabled=bool(data.get(sw_key, True))))
+    return rules
+
+
+def rules_from_settings(data):
+    """Rules for a loaded settings.json, migrating the old flat keys.
+
+    Precedence matters: a saved `skills` list always wins, including an empty
+    one -- deleting every row has to stay deleted, not silently resurrect the
+    three defaults on next launch.
+    """
+    if not isinstance(data, dict):
+        return default_rules()
+    if "skills" in data:
+        return parse_rules(data["skills"])
+    if any(sw in data or cd in data for sw, cd, *_ in _LEGACY_ROWS):
+        return _migrate_legacy(data)
+    return default_rules()

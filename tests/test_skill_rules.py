@@ -85,3 +85,51 @@ def test_the_vocabularies_are_exactly_what_the_gui_offers():
     assert TRIGGERS == ("always", "in_combat", "enemy_visible", "hp_below",
                         "zone_entry", "while_moving")
     assert set(RESERVED_KEYS) == {"1", "f"}
+
+
+from skills import default_rules, rules_from_settings  # noqa: E402
+
+# The settings.json shape shipped before this change.
+LEGACY = {
+    "zone": "Satanic (auto)",
+    "death_sw": True, "melee_sw": False,
+    "rc_sw": True, "rc_cd": "10.0",
+    "k3_sw": True, "k3_cd": "50.0",
+    "mv_sw": False, "mv_cd": "3.0",
+}
+
+
+def test_migration_reproduces_todays_three_abilities():
+    """An existing customer must see their setup unchanged on first launch,
+    only now editable."""
+    rules = rules_from_settings(LEGACY)
+    assert [(r.key, r.style, r.interval, r.trigger, r.enabled) for r in rules] == [
+        ("e", "tap", 10.0, "in_combat", True),
+        ("3", "double", 50.0, "enemy_visible", True),
+        ("r", "aim", 3.0, "while_moving", False),
+    ]
+
+
+def test_a_saved_rule_list_wins_over_the_legacy_keys():
+    data = dict(LEGACY)
+    data["skills"] = [{"key": "q", "style": "tap", "interval": 7.0,
+                       "trigger": "always"}]
+    assert [r.key for r in rules_from_settings(data)] == ["q"]
+
+
+def test_an_empty_saved_list_is_respected_not_re_migrated():
+    """Deleting every row must stay deleted."""
+    assert rules_from_settings({"skills": [], **LEGACY}) == []
+
+
+def test_settings_with_neither_gets_the_defaults():
+    assert rules_from_settings({}) == default_rules()
+    assert rules_from_settings(None) == default_rules()
+
+
+def test_the_defaults_are_the_three_shipped_abilities():
+    assert [(r.key, r.style, r.interval, r.trigger) for r in default_rules()] == [
+        ("e", "tap", 10.0, "in_combat"),
+        ("3", "double", 50.0, "enemy_visible"),
+        ("r", "aim", 3.0, "while_moving"),
+    ]
