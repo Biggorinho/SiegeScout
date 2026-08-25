@@ -47,7 +47,8 @@ import mss  # noqa: E402
 import combat  # noqa: E402
 from config import SCREEN_W, SCREEN_H, ZONE_NODES_WORLD  # noqa: E402
 from input_control import (  # noqa: E402
-    release_all_inputs, sleep_interruptible, wasd_move,
+    attack_key_down, attack_key_up, release_all_inputs, sleep_interruptible,
+    wasd_move, wasd_move_and_attack,
 )
 from minimap import get_minimap_region  # noqa: E402
 
@@ -68,16 +69,73 @@ SCAN_LEGS = [
 ]
 
 
+# The game disables Vote Reset while enemies are near, which is the single
+# biggest threat to a long survey: the bot spawns into a pack, cannot reset, and
+# every remaining zone is skipped. Clearing the spawn area first is what makes an
+# unattended full run viable -- a first smoke run lost 3 of 4 visits to exactly
+# this. Sweeping the aim around while holding attack kills or scatters whatever
+# is adjacent without needing enemy detection here.
+CLEAR_SWEEP_DIRS = [(0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1)]
+
+
 def _grab_minimap(sct, mode="small"):
     region = get_minimap_region(mode)
     return cv2.cvtColor(np.array(sct.grab(region)), cv2.COLOR_BGRA2BGR)
+
+
+def _clear_spawn_area(seconds):
+    """Hold attack and sweep around, to unblock a Vote Reset. True unless aborted."""
+    if seconds <= 0:
+        return True
+    per_dir = max(0.12, seconds / float(len(CLEAR_SWEEP_DIRS)))
+    attack_key_down()
+    try:
+        for dx, dy in CLEAR_SWEEP_DIRS:
+            # Small steps: the point is to face each direction and swing, not to
+            # walk away from the spawn point the captures are relative to.
+            wasd_move_and_attack(dx * 200, dy * 200, duration=per_dir,
+                                 aim_dx=dx * 200, aim_dy=dy * 200)
+            if not sleep_interruptible(0.05):
+                return False
+    finally:
+        attack_key_up()
+        release_all_inputs()
+    return True
 
 
 def _safe_name(zone):
     return re.sub(r"[^A-Za-z0-9]+", "_", zone).strip("_")
 
 
-def survey(out_dir, zones, passes, minimap_mode):
+def _travel_to(sct, full_mon, zone, clear_seconds, retries):
+    """Vote-reset into `zone`. Returns (True | reason, aborted).
+
+    A blocked reset is the expected failure, not an exceptional one: the game
+    disables Vote Reset while enemies are near, so the fix is to clear them and
+    ask again rather than to give up on the zone.
+    """
+    reason = "unknown"
+    for attempt in range(retries + 1):
+        if attempt > 0:
+            print(f"[survey]   blocked ({reason}) -- clearing spawn area, "
+                  f"retry {attempt}/{retries}")
+            if not _clear_spawn_area(clear_seconds):
+                return "aborted", True
+        try:
+            result = combat.run_vote_reset_sequence(sct, full_mon, target_zone=zone)
+        except Exception as exc:
+            return f"{type(exc).__name__}: {exc}", False
+        if result == "unavailable":
+            reason = "enemies near / safe zone / cooldown"
+            continue
+        if result is False:
+            reason = "reset failed"
+            continue
+        return True, False
+    return reason, False
+
+
+def survey(out_dir, zones, passes, minimap_mode, clear_seconds, reset_retries):
     os.makedirs(out_dir, exist_ok=True)
     manifest_path = os.path.join(out_dir, "manifest.json")
     manifest = []
@@ -93,17 +151,12 @@ def survey(out_dir, zones, passes, minimap_mode):
         for p in range(passes):
             for zone in zones:
                 print(f"[survey] pass {p + 1}/{passes}  ->  {zone}")
-                try:
-                    result = combat.run_vote_reset_sequence(
-                        sct, full_mon, target_zone=zone)
-                except Exception as exc:
-                    print(f"[survey]   reset raised {type(exc).__name__}: {exc} -- skipping")
-                    continue
-                if result == "unavailable":
-                    print("[survey]   vote reset unavailable here -- skipping")
-                    continue
-                if result is False:
-                    print("[survey]   reset failed -- skipping")
+                result, aborted = _travel_to(sct, full_mon, zone, clear_seconds,
+                                             reset_retries)
+                if aborted:
+                    return manifest, True
+                if result is not True:
+                    print(f"[survey]   could not reach {zone} ({result}) -- skipping")
                     continue
 
                 if not sleep_interruptible(SETTLE_SECONDS):
@@ -185,7 +238,7 @@ def analyse(out_dir):
             cors = [float((sigs[i] * sigs[j]).mean())
                     for i in range(len(sigs)) for j in range(i + 1, len(sigs))]
             med = float(np.median(cors))
-            print(f"{zone[:27]:<28}{len(recs):>7}{label:>9}{med:>18.3f}")
+            print(f"{zone[:27]:<28}{len(recs):>7}  {label:>9}{med:>16.3f}")
             summary.append((zone, label, med))
 
     if summary:
@@ -206,6 +259,11 @@ def main():
     ap.add_argument("--zones", default="", help="comma-separated subset (default: all 46)")
     ap.add_argument("--minimap", default="small", choices=("small", "large"))
     ap.add_argument("--countdown", type=int, default=6, help="seconds to alt-tab back")
+    ap.add_argument("--clear-seconds", type=float, default=3.0,
+                    help="attack sweep to clear enemies before retrying a blocked "
+                         "reset (default: 3.0, 0 disables)")
+    ap.add_argument("--reset-retries", type=int, default=2,
+                    help="clear-and-retry attempts per zone (default: 2)")
     ap.add_argument("--analyse", action="store_true", help="analyse an existing survey and exit")
     args = ap.parse_args()
 
@@ -231,7 +289,8 @@ def main():
 
     aborted = False
     try:
-        manifest, aborted = survey(args.out, zones, args.passes, args.minimap)
+        manifest, aborted = survey(args.out, zones, args.passes, args.minimap,
+                                   args.clear_seconds, args.reset_retries)
     finally:
         release_all_inputs()
     print(f"[survey] {'aborted after' if aborted else 'done —'} "
