@@ -870,8 +870,23 @@ def _click_vote_reset_menu_button(sct, full_mon, attempts):
         return False
     post_frame = grab_frame_bgr(sct, full_mon)
     if is_pause_menu_visible(post_frame) and _vote_reset_row_is_active(post_frame, click_y):
-        print("[RST] vote reset click had no effect -> hover-settle retry")
-        left_click_at(vote_x, click_y, hold_time=0.10, settle_time=0.25)
+        # Retry somewhere ELSE. This used to re-click the identical y, so a
+        # mis-measured row simply missed again: a live run clicked y=460 four
+        # times running, failed every time, and hit the 75s lockout — while
+        # every successful reset that session landed at 475-485. Row centres
+        # come from a contour whose height may be anywhere in 12..135px, so a
+        # merged or clipped button shifts the centre while still looking like a
+        # clean 4-row stack.
+        #
+        # The calibrated Y is the safe second choice: it is the same value the
+        # no-stack fallback already trusts, and it is one full row above
+        # Options, so this cannot walk onto Save & Exit.
+        retry_y = VOTE_RESET_FIXED_CLICK_Y_PX
+        if abs(retry_y - click_y) < 6:
+            retry_y = click_y  # already there; a different spot would be worse
+        print(f"[RST] vote reset click had no effect at y={click_y} "
+              f"-> retry at calibrated y={retry_y}")
+        left_click_at(vote_x, retry_y, hold_time=0.10, settle_time=0.25)
         if not sleep_interruptible(0.30):
             return False
     return True
