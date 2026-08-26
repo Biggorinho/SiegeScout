@@ -313,6 +313,15 @@ MINING_UNREACHABLE_COOLDOWN_SECONDS   = 6.0
 RESOURCE_COLLECT_START_DELAY_SECONDS  = 18.0
 
 LOOT_ITEMS_SCAN_INTERVAL_SECONDS      = 0.10
+# After an on-screen item tag is written off as unreachable, stop scanning for
+# a moment. Exactly the same fix as MINING_UNREACHABLE_COOLDOWN_SECONDS above,
+# for exactly the same reason: clearing the target alone does nothing, because
+# the next scan 0.1s later re-finds the same tag. Observed 2026-08-26 -- gave
+# up on a tag at (954,533), re-acquired (953,534) one pixel away, and burned
+# 9s in two give-up cycles, which then tripped "No attack for 7s -> Vote
+# Reset". Long enough for the bot to move somewhere the tag is no longer the
+# nearest candidate.
+LOOT_ITEMS_UNREACHABLE_COOLDOWN_SECONDS = 6.0
 LOOT_ITEMS_CLICK_INTERVAL_SECONDS     = 0.35
 
 # ── minimap-driven resource targeting ────────────────────────────────────

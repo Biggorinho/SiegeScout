@@ -52,6 +52,7 @@ from config import (
     MINING_INTERACT_INTERVAL_SECONDS,
     MINING_QTE_PRESS_COOLDOWN_SECONDS,
     LOOT_ITEMS_SCAN_INTERVAL_SECONDS,
+    LOOT_ITEMS_UNREACHABLE_COOLDOWN_SECONDS,
     LOOT_ITEMS_CLICK_INTERVAL_SECONDS,
     MINING_APPROACH_MIN_DIST_PX,
     MINING_APPROACH_JUMP_DIST_PX,
@@ -388,6 +389,7 @@ def run(
     last_explore_target          = None
     last_mining_scan_t           = 0.0
     mining_scan_blocked_until    = 0.0
+    loot_scan_blocked_until      = 0.0
     last_mining_click_t          = 0.0
     last_mining_interact_t       = 0.0
     last_mining_qte_press_t      = 0.0
@@ -1797,7 +1799,9 @@ def run(
                     minimap_item_recent = (now_loop - last_minimap_item_t) <= 8.0
                     if not (minimap_item_recent or _loot_goblin_active):
                         items_on_screen = []
-                    elif (now_loop - last_loot_items_scan_t) >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS:
+                    elif (now_loop >= loot_scan_blocked_until
+                          and (now_loop - last_loot_items_scan_t)
+                          >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS):
                         items_on_screen = find_item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
 
@@ -1846,6 +1850,14 @@ def run(
                                     items_on_screen = []
                                     loot_click_stuck_since = 0.0
                                     last_loot_items_scan_t = now_loop
+                                    # Clearing the target is not
+                                    # enough: the next scan re-finds
+                                    # the same tag a pixel away and
+                                    # the give-up loops. Same fix as
+                                    # the mining scan's.
+                                    loot_scan_blocked_until = (
+                                        now_loop
+                                        + LOOT_ITEMS_UNREACHABLE_COOLDOWN_SECONDS)
                             else:
                                 loot_click_stuck_since = 0.0
                             if (now_loop - last_loot_items_click_t) >= LOOT_ITEMS_CLICK_INTERVAL_SECONDS:
