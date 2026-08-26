@@ -23,6 +23,7 @@ from PIL import Image, ImageTk
 import config
 import license as _lic
 import stats_tracker as _stats
+from skills import STYLES, TRIGGERS, validate_key
 
 
 # ── palette (SiegeScout) ─────────────────────────────────────────────────────
@@ -345,8 +346,113 @@ class BotUI(tk.Tk):
         zone_menu.pack(side=tk.RIGHT)
 
     def _build_tab_skills(self, parent):
-        """Filled in by Task 7."""
-        tk.Frame(parent, bg=BG).pack(fill=tk.X)
+        card = tk.Frame(parent, bg=SURFACE, padx=14, pady=12,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill=tk.X, pady=(10, 0))
+        tk.Label(card, text="SKILL RULES", bg=SURFACE, fg=FG_MUTE,
+                 font=self.f_cap).pack(anchor=tk.W, pady=(0, 2))
+        tk.Label(card, text="Key 1 is the health potion and F is interact — "
+                            "both stay under the bot's control.",
+                 bg=SURFACE, fg=FG_MUTE,
+                 font=("Consolas", 8)).pack(anchor=tk.W, pady=(0, 8))
+        self._skill_list = tk.Frame(card, bg=SURFACE)
+        self._skill_list.pack(fill=tk.X)
+        self._skill_rows = []
+        self._skill_err = tk.Label(card, text="", bg=SURFACE, fg=RED,
+                                   font=("Consolas", 8), justify=tk.LEFT,
+                                   anchor=tk.W)
+        self._skill_err.pack(fill=tk.X, pady=(4, 0))
+        HoverButton(card, text="+  Add skill", command=self._add_skill_row,
+                    bg=BORDER, fg=FG, hover_bg=BLUE, pady=5, padx=12,
+                    font=self.f_ui).pack(anchor=tk.W, pady=(8, 0))
+
+    def _add_skill_row(self, rule=None):
+        row = tk.Frame(self._skill_list, bg=SURFACE)
+        row.pack(fill=tk.X, pady=2)
+        state = {"frame": row}
+
+        state["enabled"] = Switch(row, initial=(rule.enabled if rule else True))
+        state["enabled"].pack(side=tk.LEFT)
+
+        state["key"] = tk.StringVar(value=(rule.key if rule else ""))
+        tk.Entry(row, textvariable=state["key"], width=3,
+                 bg="#2a2e2a", fg=FG, insertbackground=FG, relief=tk.FLAT,
+                 bd=2, font=self.f_ui, justify=tk.CENTER
+                 ).pack(side=tk.LEFT, padx=(8, 0))
+        state["key"].trace_add("write", lambda *_a: self._check_skill_keys())
+
+        def _menu(var, values, width):
+            m = tk.OptionMenu(row, var, *values)
+            m.config(bg=SURFACE, fg=FG, activebackground=BLUE,
+                     activeforeground=FG, relief=tk.FLAT, bd=0,
+                     font=self.f_ui, highlightthickness=0, width=width)
+            m["menu"].config(bg=SURFACE, fg=FG, activebackground=BLUE,
+                             activeforeground=FG, font=self.f_ui,
+                             relief=tk.FLAT, bd=0)
+            m.pack(side=tk.LEFT, padx=(6, 0))
+
+        state["style"] = tk.StringVar(value=(rule.style if rule else "tap"))
+        _menu(state["style"], STYLES, 6)
+        state["trigger"] = tk.StringVar(value=(rule.trigger if rule else "always"))
+        _menu(state["trigger"], TRIGGERS, max(len(t) for t in TRIGGERS))
+
+        state["hp"] = tk.StringVar(value=str(rule.hp_percent if rule else 40))
+        tk.Entry(row, textvariable=state["hp"], width=3, bg="#2a2e2a", fg=FG,
+                 insertbackground=FG, relief=tk.FLAT, bd=2, font=self.f_ui,
+                 justify=tk.CENTER).pack(side=tk.LEFT, padx=(6, 0))
+        tk.Label(row, text="%", bg=SURFACE, fg=FG_MUTE,
+                 font=self.f_ui).pack(side=tk.LEFT)
+
+        HoverButton(row, text="✕",
+                    command=lambda: self._remove_skill_row(row, state),
+                    bg=SURFACE, fg=FG_MUTE, hover_bg=RED, pady=2, padx=6,
+                    font=self.f_ui).pack(side=tk.RIGHT)
+        state["interval"] = tk.StringVar(value=str(rule.interval if rule else 10.0))
+        tk.Entry(row, textvariable=state["interval"], width=5, bg="#2a2e2a",
+                 fg=FG, insertbackground=FG, relief=tk.FLAT, bd=2,
+                 font=self.f_ui, justify=tk.CENTER
+                 ).pack(side=tk.RIGHT, padx=(0, 8))
+        tk.Label(row, text="every", bg=SURFACE, fg=FG_MUTE,
+                 font=self.f_ui).pack(side=tk.RIGHT, padx=(0, 4))
+
+        self._skill_rows.append(state)
+        self._check_skill_keys()
+
+    def _remove_skill_row(self, row, state):
+        row.destroy()
+        self._skill_rows.remove(state)
+        self._check_skill_keys()
+
+    def _check_skill_keys(self):
+        """Show the first key problem inline, if any."""
+        for state in self._skill_rows:
+            typed = state["key"].get().strip()
+            if not typed:
+                continue          # a half-typed new row is not an error yet
+            err = validate_key(typed)
+            if err is not None:
+                self._skill_err.config(text=err)
+                return
+        self._skill_err.config(text="")
+
+    def _collect_skill_rules(self):
+        """The rows as settings dicts, in display order.
+
+        A dumb reader on purpose: every value stays a string here and
+        skills.parse_rules does the coercing and the dropping, so there is
+        one place that decides what a valid rule is.
+        """
+        return [
+            {
+                "key": state["key"].get().strip().lower(),
+                "style": state["style"].get(),
+                "trigger": state["trigger"].get(),
+                "interval": state["interval"].get(),
+                "hp_percent": state["hp"].get(),
+                "enabled": state["enabled"].get(),
+            }
+            for state in self._skill_rows
+        ]
 
     def _build_tab_advanced(self, parent):
         card = tk.Frame(parent, bg=SURFACE, padx=14, pady=12,
