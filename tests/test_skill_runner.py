@@ -115,3 +115,25 @@ def test_replacing_the_rules_resets_the_timers():
     runner.due(_state(now=100.0))
     runner.set_rules([_rule(key="q")])
     assert [r.key for r in runner.due(_state(now=100.1))] == ["q"]
+
+
+def test_defer_all_delays_every_rule_by_its_own_interval():
+    """Entering combat must not dump every skill at once -- the old code
+    pushed both ability timers to now+cooldown for exactly this reason."""
+    runner = SkillRunner([_rule(key="e", interval=10.0),
+                          _rule(key="q", interval=2.0)])
+    runner.defer_all(100.0)
+    assert runner.due(_state(now=101.0)) == []
+    assert [r.key for r in runner.due(_state(now=102.5))] == ["q"]
+    # q keeps coming due on its own short interval; e is held off by its
+    # longer one, which is the point -- defer_all is per-rule, not global.
+    assert [r.key for r in runner.due(_state(now=109.9))] == ["q"]
+    assert [r.key for r in runner.due(_state(now=110.5))] == ["e"]
+
+
+def test_defer_all_on_a_fresh_runner_still_delays():
+    """set_rules clears timers; defer_all must then push them out again."""
+    runner = SkillRunner([_rule(interval=10.0)])
+    runner.set_rules([_rule(interval=10.0)])
+    runner.defer_all(100.0)
+    assert runner.due(_state(now=105.0)) == []

@@ -245,3 +245,14 @@ class SkillRunner:
             self._next_t[index] = state.now + rule.interval
             firing.append(rule)
         return firing
+
+    def defer_all(self, now):
+        """Push every rule's next fire out by its own interval.
+
+        Entering combat, and starting a zone, used to reset the two ability
+        timers to now+cooldown. That delay is deliberate: without it every
+        configured skill fires at once the moment the state changes, which
+        wastes the casts the opening sequence already made.
+        """
+        for index, rule in enumerate(self._rules):
+            self._next_t[index] = now + rule.interval

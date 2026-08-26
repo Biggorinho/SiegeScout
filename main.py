@@ -22,7 +22,6 @@ from config import (
     ATTACK_LOST_GRACE, ATTACK_TIMEOUT, FLEE_MAX_WAIT,
     ATTACK_MOVE_REPLAN_SECONDS, ATTACK_CHASE_MINIMAP_DIST,
     MELEE_CHASE_MINIMAP_DIST,
-    ATTACK_RIGHTCLICK_INTERVAL_SECONDS, ATTACK_KEY3_INTERVAL_SECONDS,
     ATTACK_SWEEP_INTERVAL_SECONDS, ATTACK_SWEEP_DURATION_SECONDS, ATTACK_SWEEP_RADIUS,
     ATTACK_NO_CONFIRMED_ENEMY_TIMEOUT_SECONDS,
     ATTACK_STUCK_WINDOW, ATTACK_STUCK_MIN_MOVE,
@@ -124,7 +123,7 @@ from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
     attack_key_down, attack_key_up,
-    cast_key_skill_safe, cast_key3_skill_safe, cast_movement_ability,
+    cast_key_skill_safe, cast_movement_ability, cast_skill_rule,
     spin_to_clear_melee,
     tap_key, release_all_inputs,
     left_click_at,
@@ -139,6 +138,7 @@ from combat import (
     handle_stray_world_map, safe_zone_walk_delta,
 )
 from debug_utils import DebugRecorder, FrameCapture
+from skills import LoopState, SkillRunner, default_rules, parse_rules
 
 
 def run(
@@ -147,6 +147,7 @@ def run(
     enable_rightclick_skill=None, rightclick_cooldown=None,
     enable_key3_skill=None, key3_cooldown=None,
     enable_movement_ability=None, movement_ability_cooldown=None,
+    skill_rules=None,
     melee_mode=None,
     enable_debug_snapshots=None,
 ):
@@ -156,14 +157,16 @@ def run(
     _enable_mining           = _cfg.ENABLE_MINING         if enable_mining is None         else enable_mining
     _enable_loot_items       = _cfg.ENABLE_LOOT_ITEMS     if enable_loot_items is None     else enable_loot_items
     _enable_debug_snapshots  = _cfg.ENABLE_DEBUG_SNAPSHOTS if enable_debug_snapshots is None else enable_debug_snapshots
-    _enable_buff_shield  = _cfg.ENABLE_BUFF_SHIELD_SKILL if enable_rightclick_skill is None else enable_rightclick_skill
-    _buff_shield_key     = _cfg.BUFF_SHIELD_KEY
-    _buff_shield_cd      = ATTACK_RIGHTCLICK_INTERVAL_SECONDS if rightclick_cooldown is None else rightclick_cooldown
-    _enable_key3_skill       = _cfg.ENABLE_KEY3_SKILL if enable_key3_skill is None else enable_key3_skill
-    _key3_cooldown           = ATTACK_KEY3_INTERVAL_SECONDS if key3_cooldown is None else key3_cooldown
-    _enable_movement_ability = _cfg.ENABLE_MOVEMENT_ABILITY if enable_movement_ability is None else enable_movement_ability
-    _movement_ability_key    = _cfg.MOVEMENT_ABILITY_KEY
-    _movement_ability_cd     = _cfg.MOVEMENT_ABILITY_COOLDOWN_SECONDS if movement_ability_cooldown is None else movement_ability_cooldown
+    # Skill rules replace the three hardcoded abilities. A caller may pass
+    # SkillRule objects or the raw settings rows; anything unusable is
+    # dropped rather than taking the bot down with it.
+    if skill_rules is None:
+        _skill_rules = default_rules()
+    elif skill_rules and isinstance(skill_rules[0], dict):
+        _skill_rules = parse_rules(skill_rules)
+    else:
+        _skill_rules = list(skill_rules)
+    skill_runner = SkillRunner(_skill_rules)
 
     print("Bot started | q=Stop | p=Pause | esc=Emergency stop")
     print("Game window must be visible (no background capture with mss)")
@@ -174,9 +177,12 @@ def run(
     print(f"  death_handling = {_enable_death_handling}")
     print(f"  melee_mode     = {_melee_mode}")
     print(f"  target_zone    = {target_zone}")
-    print(f"  buff_shield    = {_enable_buff_shield} (key={_buff_shield_key}, cd={_buff_shield_cd}s)")
-    print(f"  key3_skill     = {_enable_key3_skill} (cd={_key3_cooldown}s)")
-    print(f"  move_ability   = {_enable_movement_ability} (key={_movement_ability_key}, cd={_movement_ability_cd}s)")
+    print(f"  skills         = {len(_skill_rules)} rule(s)")
+    for _r in _skill_rules:
+        _hp = f" <{_r.hp_percent}%" if _r.trigger == "hp_below" else ""
+        _on = "on " if _r.enabled else "off"
+        print(f"    [{_on}] {_r.key} {_r.style:6} every {_r.interval:>5.1f}s "
+              f"on {_r.trigger}{_hp}")
     print(f"  debug_snapshots= {_enable_debug_snapshots}")
     print("──────────────────────────────────────────────")
 
@@ -329,10 +335,19 @@ def run(
     last_hp_recovery_t           = 0.0
     last_attack_key_refresh_t    = 0.0
     last_known_hp                = None
-    next_attack_rightclick_t     = time.time() + _buff_shield_cd
-    next_attack_key3_t           = time.time() + _key3_cooldown
     last_attack_sweep_t          = time.time()
-    last_movement_ability_t      = 0.0
+    skill_runner.defer_all(time.time())
+    # The aim vector for `aim` rules. It cannot be computed before the skill
+    # block runs -- explore_dx/dy and adx/ady are set inside the state blocks
+    # further down -- so each state block writes the direction it just chose
+    # and the skill block reads the most recent one. During EXPLORE that
+    # direction is held for EXPLORE_MOVE_MIN/MAX_SECONDS anyway, so it is
+    # current in practice.
+    aim_vec = [0.0, 0.0]
+    # Armed at zone start, consumed once by the skill block after the
+    # transition freeze. A list so the nested zone-start helper can arm it
+    # without a nonlocal, matching last_jump_t / attack_stuck_jump_pref.
+    zone_entry_armed = [True]
     hp_zero_since                = 0.0
     hp_low_since                 = 0.0
     hp_bar_missing_until         = 0.0
@@ -420,6 +435,7 @@ def run(
         hp_bar_missing_until          = zone_transition_until + HP_BAR_MISSING_GRACE_SECONDS
         zone_started_t                = zone_transition_until
         zone_opening_rightclick_pending = True
+        zone_entry_armed[0] = True
         state                         = State.EXPLORE
         state_start                   = last_vote_reset_t
         explore_pause_until           = zone_transition_until
@@ -468,7 +484,7 @@ def run(
 
     def _enter_attack_mode(now_loop, adx=0, ady=0, hold_attack=False):
         nonlocal state, state_start, hard_stuck_since, escape_committed_until
-        nonlocal next_attack_rightclick_t, next_attack_key3_t, last_attack_sweep_t
+        nonlocal last_attack_sweep_t
         nonlocal attack_move_dx, attack_move_dy, attack_strafe_sign
         nonlocal kite_committed_until, kite_cached_move, last_attack_move_plan_t
         nonlocal zone_opening_rightclick_pending, attack_held
@@ -479,8 +495,7 @@ def run(
         state_start                    = now_loop
         hard_stuck_since               = 0.0
         escape_committed_until         = 0.0
-        next_attack_rightclick_t       = now_loop + _buff_shield_cd
-        next_attack_key3_t             = now_loop + _key3_cooldown
+        skill_runner.defer_all(now_loop)
         last_attack_sweep_t            = now_loop - ATTACK_SWEEP_INTERVAL_SECONDS
         last_attack_move_plan_t        = 0.0
         attack_move_dx, attack_move_dy  = adx, ady
@@ -762,8 +777,7 @@ def run(
                 # Skip scripted opening spin/buff: start with normal explore pathing.
                 zone_opening_rightclick_pending   = False
                 zone_opening_key3_taps_remaining  = 0
-                next_attack_rightclick_t          = time.time() + _buff_shield_cd
-                next_attack_key3_t                = time.time() + _key3_cooldown
+                skill_runner.defer_all(time.time())
                 # Lock in the minimap-computed direction for 2.5s so the bot physically
                 # moves away from the spawn area before the navigator re-evaluates.
                 escape_dx, escape_dy       = explore_dx, explore_dy
@@ -1302,14 +1316,30 @@ def run(
                 _attempt_vote_reset(with_spin=True)
                 continue
 
-            # ── right-click shield refresh ────────────────────────────────────
-            # Only refresh the buff in a confirmed combat zone (combat has happened,
-            # or an enemy is up) — never in the safe zone, where it wastes the cast.
-            if _enable_buff_shield and (zone_had_attack or confirmed_enemy_now) \
-                    and now_loop >= next_attack_rightclick_t and (now_loop - last_jump_t[0]) >= 0.42:
-                attack_held              = cast_key_skill_safe(_buff_shield_key, attack_held, resume_left=True)
-                rightclick_busy_until    = time.time() + 0.35
-                next_attack_rightclick_t = now_loop + _buff_shield_cd
+            # ── skill rules ───────────────────────────────────────────────────
+            # One place where every configured key fires. The conditions that
+            # used to be spelled out at three separate sites now live in the
+            # rules, and the guards that used to be spelled out here live in
+            # the runner.
+            _zone_entered = zone_entry_armed[0] and now_loop >= zone_transition_until
+            _skill_state = LoopState(
+                now=now_loop,
+                in_combat=zone_had_attack,
+                enemy_visible=confirmed_enemy_now,
+                hp=hp,
+                zone_entered=_zone_entered,
+                moving=(abs(aim_vec[0]) + abs(aim_vec[1])) > 0,
+                aim_dx=aim_vec[0], aim_dy=aim_vec[1],
+                busy_until=rightclick_busy_until,
+                last_jump_t=last_jump_t[0],
+            )
+            for _rule in skill_runner.due(_skill_state):
+                attack_held = cast_skill_rule(_rule, attack_held,
+                                              aim_vec[0], aim_vec[1])
+                if _rule.style != "aim":
+                    rightclick_busy_until = time.time() + 0.35
+            if _zone_entered:
+                zone_entry_armed[0] = False
 
             # Periodic debug snapshot — at this point all detection state is available.
             if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:
@@ -1919,11 +1949,7 @@ def run(
                     explore_dx, explore_dy = move
 
                 explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
-                if _enable_movement_ability and \
-                        (now_loop - last_movement_ability_t) >= _movement_ability_cd and \
-                        now_loop >= rightclick_busy_until:
-                    cast_movement_ability(explore_dx, explore_dy, key=_movement_ability_key)
-                    last_movement_ability_t = now_loop
+                aim_vec[0], aim_vec[1] = explore_dx, explore_dy
                 _spd_t = _st.get_tracker()
                 _move_spd = (0.65 if (_spd_t and _spd_t.available
                                        and _st.BUFF_ZEPHYS_GRACE in _spd_t.active_buffs)
@@ -1959,10 +1985,6 @@ def run(
                         move_dy=attack_move_dy,
                     )
                     last_attack_sweep_t = time.time()
-
-                if _enable_key3_skill and now_loop >= next_attack_key3_t:
-                    attack_held        = cast_key3_skill_safe(attack_held, resume_left=True)
-                    next_attack_key3_t = now_loop + _key3_cooldown
 
                 attack_stuck.update(center[0], center[1])
                 attack_intent_stuck.update(minimap, attack_move_dx, attack_move_dy)
@@ -2147,13 +2169,8 @@ def run(
                     duration=random.uniform(0.95, 1.45),
                     aim_dx=adx, aim_dy=ady,
                 )
-                if _enable_movement_ability and \
-                        (now_loop - last_movement_ability_t) >= _movement_ability_cd and \
-                        now_loop >= rightclick_busy_until:
-                    cast_movement_ability(adx if confirmed_enemy_now else attack_move_dx,
-                                          ady if confirmed_enemy_now else attack_move_dy,
-                                          key=_movement_ability_key)
-                    last_movement_ability_t = now_loop
+                aim_vec[0] = adx if confirmed_enemy_now else attack_move_dx
+                aim_vec[1] = ady if confirmed_enemy_now else attack_move_dy
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(attack_move_dx, attack_move_dy, last_jump_t)
 
