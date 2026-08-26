@@ -23,7 +23,8 @@ from PIL import Image, ImageTk
 import config
 import license as _lic
 import stats_tracker as _stats
-from skills import STYLES, TRIGGERS, validate_key
+from skills import (STYLES, TRIGGERS, validate_key, default_rules,
+                     parse_rules, rules_from_settings, rules_to_json)
 
 
 # ── palette (SiegeScout) ─────────────────────────────────────────────────────
@@ -730,45 +731,43 @@ class BotUI(tk.Tk):
     def _save_settings(self):
         try:
             data = {
-                "zone":     self._zone_var.get(),
-                "death_sw": self._death_sw.get(),
-                "melee_sw": self._melee_sw.get(),
+                "zone":      self._zone_var.get(),
+                "death_sw":  self._death_sw.get(),
+                "melee_sw":  self._melee_sw.get(),
+                "mining_sw": self._mining_sw.get(),
+                "loot_sw":   self._loot_sw.get(),
+                "debug_sw":  self._debug_sw.get(),
+                "skills":    rules_to_json(parse_rules(self._collect_skill_rules())),
             }
-            for attr, key in (
-                ("_rc_sw", "rc_sw"), ("_rc_cd", "rc_cd"),
-                ("_k3_sw", "k3_sw"), ("_k3_cd", "k3_cd"),
-                ("_mv_sw", "mv_sw"), ("_mv_cd", "mv_cd"),
-            ):
-                widget = getattr(self, attr, None)
-                if widget is not None:
-                    data[key] = widget.get()
             with open(_SETTINGS_FILE, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception:
             pass
 
     def _load_settings(self):
+        self._settings_had_skills = False
         try:
             with open(_SETTINGS_FILE) as f:
                 data = json.load(f)
+            self._settings_had_skills = "skills" in data
             valid_zones = {"Satanic (auto)"} | set(config.SATANIC_FIXED_NODES.keys())
             if data.get("zone") in valid_zones:
                 self._zone_var.set(data["zone"])
             for sw_attr, key in (
                 ("_death_sw", "death_sw"), ("_melee_sw", "melee_sw"),
-                ("_rc_sw", "rc_sw"), ("_k3_sw", "k3_sw"), ("_mv_sw", "mv_sw"),
+                ("_mining_sw", "mining_sw"), ("_loot_sw", "loot_sw"),
+                ("_debug_sw", "debug_sw"),
             ):
                 sw = getattr(self, sw_attr, None)
                 if sw is not None and key in data:
                     sw.set(bool(data[key]))
-            for var_attr, key in (
-                ("_rc_cd", "rc_cd"), ("_k3_cd", "k3_cd"), ("_mv_cd", "mv_cd"),
-            ):
-                var = getattr(self, var_attr, None)
-                if var is not None and key in data:
-                    var.set(str(data[key]))
+            for rule in rules_from_settings(data):
+                self._add_skill_row(rule)
         except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError):
             pass
+        if not self._skill_rows and not self._settings_had_skills:
+            for rule in default_rules():
+                self._add_skill_row(rule)
 
     def _start_bot(self):
         if not self._license_valid:
@@ -792,12 +791,6 @@ class BotUI(tk.Tk):
         sys.stdout = _QueueWriter(self._log_queue, log_file=self._bot_log_file)
         sys.stderr = _QueueWriter(self._log_queue, log_file=self._bot_log_file)
 
-        def _cd(sv, default):
-            try:
-                return max(0.1, float(sv.get()))
-            except (ValueError, tk.TclError):
-                return default
-
         _zone_sel = self._zone_var.get()
         kwargs = {
             "stop_event": self._stop_event,
@@ -807,19 +800,8 @@ class BotUI(tk.Tk):
             "enable_debug_snapshots": self._debug_sw.get(),
             "target_zone": None if _zone_sel == "Satanic (auto)" else _zone_sel,
             "melee_mode":                self._melee_sw.get(),
+            "skill_rules": self._collect_skill_rules(),
         }
-        _rc_sw = getattr(self, "_rc_sw", None)
-        if _rc_sw is not None:
-            kwargs["enable_rightclick_skill"] = _rc_sw.get()
-            kwargs["rightclick_cooldown"] = _cd(self._rc_cd, 10.0)
-        _k3_sw = getattr(self, "_k3_sw", None)
-        if _k3_sw is not None:
-            kwargs["enable_key3_skill"] = _k3_sw.get()
-            kwargs["key3_cooldown"] = _cd(self._k3_cd, 50.0)
-        _mv_sw = getattr(self, "_mv_sw", None)
-        if _mv_sw is not None:
-            kwargs["enable_movement_ability"] = _mv_sw.get()
-            kwargs["movement_ability_cooldown"] = _cd(self._mv_cd, 3.0)
         try:
             sig = inspect.signature(_main.run)
             if "on_vote_reset" in sig.parameters:
