@@ -739,8 +739,35 @@ class BotUI(tk.Tk):
                 "debug_sw":  self._debug_sw.get(),
                 "skills":    rules_to_json(parse_rules(self._collect_skill_rules())),
             }
-            with open(_SETTINGS_FILE, "w") as f:
+        except Exception as exc:
+            self._log_settings_problem("collect", exc)
+            return
+        # Write a temporary file and swap it in, rather than truncating the
+        # real one and hoping. This file now carries the whole skill-rule
+        # list, not the three booleans it held when this was written -- a
+        # crash midway through json.dump would take the user's configuration
+        # with it, and it is gitignored, so nothing else has a copy.
+        tmp = _SETTINGS_FILE + ".tmp"
+        try:
+            with open(tmp, "w") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, _SETTINGS_FILE)
+        except Exception as exc:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            self._log_settings_problem("write", exc)
+
+    def _log_settings_problem(self, stage, exc):
+        """Say what went wrong without taking the GUI down with it.
+
+        Silence was the old behaviour and it is worse than it looks: a user
+        whose settings stop saving has no way to tell, and only finds out
+        when their rules are gone.
+        """
+        try:
+            self._push_log(f"Could not save settings ({stage}): {exc}", "err")
         except Exception:
             pass
 
@@ -749,6 +776,13 @@ class BotUI(tk.Tk):
         try:
             with open(_SETTINGS_FILE) as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                # A top-level JSON list or string parses fine and then raises
+                # AttributeError on data.get -- which this except clause does
+                # not catch, so the GUI would die on startup. Everything else
+                # here fails soft; this should too.
+                raise TypeError(
+                    f"settings.json holds a {type(data).__name__}, not an object")
             self._settings_had_skills = "skills" in data
             valid_zones = {"Satanic (auto)"} | set(config.SATANIC_FIXED_NODES.keys())
             if data.get("zone") in valid_zones:
