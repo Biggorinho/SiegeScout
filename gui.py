@@ -270,6 +270,94 @@ class BotUI(tk.Tk):
         self.geometry("560x980")
         self.after(50, self._init_license)
 
+    def _switch_row(self, parent, label, default, enabled=True, soon=False):
+        row = tk.Frame(parent, bg=SURFACE)
+        row.pack(fill=tk.X, pady=3)
+        tk.Label(row, text=label, bg=SURFACE, fg=FG if enabled else FG_MUTE, font=self.f_ui).pack(side=tk.LEFT)
+        if soon:
+            tag = tk.Label(row, text=" SOON ", bg="#3a2a1a", fg=PEACH, font=self.f_cap, padx=4)
+            tag.pack(side=tk.LEFT, padx=(8, 0))
+        sw = Switch(row, initial=default, disabled=not enabled)
+        sw.pack(side=tk.RIGHT)
+        return sw
+
+    def _build_tab_bar(self, parent, names):
+        """A tab strip built from HoverButton, not ttk.Notebook.
+
+        The GUI imports no ttk: it is raw tk over a custom palette with
+        custom Canvas widgets. A themed Notebook draws its tab strip from
+        the Windows theme, and restyling that to match costs more than
+        thirty lines of pack/pack_forget.
+        """
+        bar = tk.Frame(parent, bg=BG)
+        bar.pack(fill=tk.X, pady=(14, 0))
+        body = tk.Frame(parent, bg=BG)
+        body.pack(fill=tk.X)
+        self._tabs = {}
+        self._tab_buttons = {}
+        for name in names:
+            btn = HoverButton(bar, text=name,
+                              command=lambda n=name: self._show_tab(n),
+                              bg=SURFACE, fg=FG_MUTE, hover_bg=BORDER,
+                              pady=6, padx=18, font=self.f_ui_bold)
+            btn.pack(side=tk.LEFT, padx=(0, 2))
+            self._tab_buttons[name] = btn
+            self._tabs[name] = tk.Frame(body, bg=BG)
+        return body
+
+    def _show_tab(self, name):
+        for other, frame in self._tabs.items():
+            frame.pack_forget()
+            self._tab_buttons[other].set_style(other, SURFACE, FG_MUTE, BORDER)
+        self._tabs[name].pack(fill=tk.X)
+        self._tab_buttons[name].set_style(name, BLUE, BG, BLUE)
+
+    def _build_tab_general(self, parent):
+        opt = tk.Frame(parent, bg=SURFACE, padx=14, pady=12,
+                       highlightbackground=BORDER, highlightthickness=1)
+        opt.pack(fill=tk.X, pady=(10, 0))
+        tk.Label(opt, text="OPTIONS", bg=SURFACE, fg=FG_MUTE,
+                 font=self.f_cap).pack(anchor=tk.W, pady=(0, 8))
+
+        self._death_sw = self._switch_row(opt, "Enable Death Handling", getattr(config, "ENABLE_DEATH_HANDLING", True))
+        self._melee_sw = self._switch_row(opt, "Melee Mode  (advances into enemies, no kiting)", getattr(config, "MELEE_MODE", False))
+        self._mining_sw = self._switch_row(opt, "Enable Mining", getattr(config, "ENABLE_MINING", False))
+        self._loot_sw = self._switch_row(opt, "Enable Loot Items", getattr(config, "ENABLE_LOOT_ITEMS", False))
+
+        tk.Frame(opt, bg=BORDER, height=1).pack(fill=tk.X, pady=(8, 4))
+
+        zone_row = tk.Frame(opt, bg=SURFACE)
+        zone_row.pack(fill=tk.X, pady=3)
+        tk.Label(zone_row, text="Target Zone", bg=SURFACE, fg=FG, font=self.f_ui).pack(side=tk.LEFT)
+
+        _zone_names = ["Satanic (auto)"] + sorted(config.SATANIC_FIXED_NODES.keys())
+        self._zone_var = tk.StringVar(value="Satanic (auto)")
+        zone_menu = tk.OptionMenu(zone_row, self._zone_var, *_zone_names)
+        zone_menu.config(
+            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
+            relief=tk.FLAT, bd=0, font=self.f_ui, highlightthickness=0,
+            width=22, anchor="e",
+        )
+        zone_menu["menu"].config(
+            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
+            font=self.f_ui, relief=tk.FLAT, bd=0,
+        )
+        zone_menu.pack(side=tk.RIGHT)
+
+    def _build_tab_skills(self, parent):
+        """Filled in by Task 7."""
+        tk.Frame(parent, bg=BG).pack(fill=tk.X)
+
+    def _build_tab_advanced(self, parent):
+        card = tk.Frame(parent, bg=SURFACE, padx=14, pady=12,
+                        highlightbackground=BORDER, highlightthickness=1)
+        card.pack(fill=tk.X, pady=(10, 0))
+        tk.Label(card, text="ADVANCED", bg=SURFACE, fg=FG_MUTE,
+                 font=self.f_cap).pack(anchor=tk.W, pady=(0, 8))
+        self._debug_sw = self._switch_row(
+            card, "Debug Snapshots",
+            getattr(config, "ENABLE_DEBUG_SNAPSHOTS", False))
+
     def _build_ui(self):
         pad = 14
         root = tk.Frame(self, bg=BG)
@@ -396,72 +484,11 @@ class BotUI(tk.Tk):
                      text="After install: restart SiegeScout as Administrator",
                      bg="#2a1a0a", fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W, pady=(2, 0))
 
-        opt = tk.Frame(root, bg=SURFACE, padx=14, pady=12, highlightbackground=BORDER, highlightthickness=1)
-        opt.pack(fill=tk.X, pady=(14, 0))
-        tk.Label(opt, text="OPTIONS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W, pady=(0, 8))
-
-        def _row(parent, label, default, enabled=True, soon=False):
-            row = tk.Frame(parent, bg=SURFACE)
-            row.pack(fill=tk.X, pady=3)
-            tk.Label(row, text=label, bg=SURFACE, fg=FG if enabled else FG_MUTE, font=self.f_ui).pack(side=tk.LEFT)
-            if soon:
-                tag = tk.Label(row, text=" SOON ", bg="#3a2a1a", fg=PEACH, font=self.f_cap, padx=4)
-                tag.pack(side=tk.LEFT, padx=(8, 0))
-            sw = Switch(row, initial=default, disabled=not enabled)
-            sw.pack(side=tk.RIGHT)
-            return sw
-
-        self._death_sw = _row(opt, "Enable Death Handling", getattr(config, "ENABLE_DEATH_HANDLING", True))
-        self._melee_sw = _row(opt, "Melee Mode  (advances into enemies, no kiting)", getattr(config, "MELEE_MODE", False))
-        self._mining_sw = _row(opt, "Enable Mining", getattr(config, "ENABLE_MINING", False))
-        self._loot_sw = _row(opt, "Enable Loot Items", getattr(config, "ENABLE_LOOT_ITEMS", False))
-        self._debug_sw = _row(opt, "Debug Snapshots", getattr(config, "ENABLE_DEBUG_SNAPSHOTS", False))
-
-        tk.Frame(opt, bg=BORDER, height=1).pack(fill=tk.X, pady=(8, 4))
-
-        zone_row = tk.Frame(opt, bg=SURFACE)
-        zone_row.pack(fill=tk.X, pady=3)
-        tk.Label(zone_row, text="Target Zone", bg=SURFACE, fg=FG, font=self.f_ui).pack(side=tk.LEFT)
-
-        _zone_names = ["Satanic (auto)"] + sorted(config.SATANIC_FIXED_NODES.keys())
-        self._zone_var = tk.StringVar(value="Satanic (auto)")
-        zone_menu = tk.OptionMenu(zone_row, self._zone_var, *_zone_names)
-        zone_menu.config(
-            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
-            relief=tk.FLAT, bd=0, font=self.f_ui, highlightthickness=0,
-            width=22, anchor="e",
-        )
-        zone_menu["menu"].config(
-            bg=SURFACE, fg=FG, activebackground=BLUE, activeforeground=FG,
-            font=self.f_ui, relief=tk.FLAT, bd=0,
-        )
-        zone_menu.pack(side=tk.RIGHT)
-
-        # ── skill bindings ────────────────────────────────────────────────────
-        sk = tk.Frame(root, bg=SURFACE, padx=14, pady=10,
-                      highlightbackground=BORDER, highlightthickness=1)
-        sk.pack(fill=tk.X, pady=(10, 0))
-        tk.Label(sk, text="SKILL BINDINGS", bg=SURFACE, fg=FG_MUTE, font=self.f_cap).pack(anchor=tk.W, pady=(0, 6))
-
-        def _skill_row(parent, label, key_hint, default_enabled, default_cd):
-            row = tk.Frame(parent, bg=SURFACE)
-            row.pack(fill=tk.X, pady=2)
-            sw = Switch(row, initial=default_enabled)
-            sw.pack(side=tk.LEFT)
-            tk.Label(row, text=label, bg=SURFACE, fg=FG, font=self.f_ui).pack(side=tk.LEFT, padx=(8, 0))
-            tk.Label(row, text=f" {key_hint} ", bg="#1e2e1e", fg=GREEN,
-                     font=self.f_cap, padx=3).pack(side=tk.LEFT, padx=(6, 0))
-            cd_var = tk.StringVar(value=str(default_cd))
-            cd_entry = tk.Entry(row, textvariable=cd_var, width=5,
-                                bg="#2a2e2a", fg=FG, insertbackground=FG,
-                                relief=tk.FLAT, bd=2, font=self.f_ui, justify=tk.CENTER)
-            cd_entry.pack(side=tk.RIGHT)
-            tk.Label(row, text="s   CD:", bg=SURFACE, fg=FG_MUTE, font=self.f_ui).pack(side=tk.RIGHT, padx=(0, 2))
-            return sw, cd_var
-
-        self._rc_sw,  self._rc_cd  = _skill_row(sk, "Buff / Shield",    "KEY E", True, 10.0)
-        self._k3_sw,  self._k3_cd  = _skill_row(sk, "Flasks",           "KEY 3", True, 50.0)
-        self._mv_sw,  self._mv_cd  = _skill_row(sk, "Movement Ability", "KEY R", True,  3.0)
+        self._build_tab_bar(root, ("General", "Skills", "Advanced"))
+        self._build_tab_general(self._tabs["General"])
+        self._build_tab_skills(self._tabs["Skills"])
+        self._build_tab_advanced(self._tabs["Advanced"])
+        self._show_tab("General")
 
         log_card = tk.Frame(root, bg=SURFACE, highlightbackground=BORDER, highlightthickness=1)
         log_card.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
@@ -600,13 +627,15 @@ class BotUI(tk.Tk):
                 "zone":     self._zone_var.get(),
                 "death_sw": self._death_sw.get(),
                 "melee_sw": self._melee_sw.get(),
-                "rc_sw":    self._rc_sw.get(),
-                "rc_cd":    self._rc_cd.get(),
-                "k3_sw":    self._k3_sw.get(),
-                "k3_cd":    self._k3_cd.get(),
-                "mv_sw":    self._mv_sw.get(),
-                "mv_cd":    self._mv_cd.get(),
             }
+            for attr, key in (
+                ("_rc_sw", "rc_sw"), ("_rc_cd", "rc_cd"),
+                ("_k3_sw", "k3_sw"), ("_k3_cd", "k3_cd"),
+                ("_mv_sw", "mv_sw"), ("_mv_cd", "mv_cd"),
+            ):
+                widget = getattr(self, attr, None)
+                if widget is not None:
+                    data[key] = widget.get()
             with open(_SETTINGS_FILE, "w") as f:
                 json.dump(data, f, indent=2)
         except Exception:
@@ -671,14 +700,20 @@ class BotUI(tk.Tk):
             "enable_loot_items": self._loot_sw.get(),
             "enable_debug_snapshots": self._debug_sw.get(),
             "target_zone": None if _zone_sel == "Satanic (auto)" else _zone_sel,
-            "enable_rightclick_skill":   self._rc_sw.get(),
-            "rightclick_cooldown":       _cd(self._rc_cd, 10.0),
-            "enable_key3_skill":         self._k3_sw.get(),
-            "key3_cooldown":             _cd(self._k3_cd, 50.0),
-            "enable_movement_ability":   self._mv_sw.get(),
-            "movement_ability_cooldown": _cd(self._mv_cd, 3.0),
             "melee_mode":                self._melee_sw.get(),
         }
+        _rc_sw = getattr(self, "_rc_sw", None)
+        if _rc_sw is not None:
+            kwargs["enable_rightclick_skill"] = _rc_sw.get()
+            kwargs["rightclick_cooldown"] = _cd(self._rc_cd, 10.0)
+        _k3_sw = getattr(self, "_k3_sw", None)
+        if _k3_sw is not None:
+            kwargs["enable_key3_skill"] = _k3_sw.get()
+            kwargs["key3_cooldown"] = _cd(self._k3_cd, 50.0)
+        _mv_sw = getattr(self, "_mv_sw", None)
+        if _mv_sw is not None:
+            kwargs["enable_movement_ability"] = _mv_sw.get()
+            kwargs["movement_ability_cooldown"] = _cd(self._mv_cd, 3.0)
         try:
             sig = inspect.signature(_main.run)
             if "on_vote_reset" in sig.parameters:
