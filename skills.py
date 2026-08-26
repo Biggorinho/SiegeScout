@@ -246,13 +246,27 @@ class SkillRunner:
             firing.append(rule)
         return firing
 
+    # Only proactive combat skills are deferred. A reactive rule must not be
+    # pushed out at the moment it becomes relevant (hp_below), a once-per-zone
+    # rule must not be swallowed by a reset (zone_entry), and the movement
+    # ability was never touched by these sites before rules existed
+    # (while_moving).
+    _DEFERRABLE_TRIGGERS = ("always", "in_combat", "enemy_visible")
+
     def defer_all(self, now):
-        """Push every rule's next fire out by its own interval.
+        """Push each proactive combat rule's next fire out by its own interval.
 
         Entering combat, and starting a zone, used to reset the two ability
         timers to now+cooldown. That delay is deliberate: without it every
         configured skill fires at once the moment the state changes, which
         wastes the casts the opening sequence already made.
+
+        It applies only to _DEFERRABLE_TRIGGERS. Deferring everything starved
+        long-interval user rules on frequent attack entries, pushed an
+        hp_below panic rule out at the exact moment combat made it relevant,
+        and delayed the movement ability that the old reset sites left alone.
         """
         for index, rule in enumerate(self._rules):
+            if rule.trigger not in self._DEFERRABLE_TRIGGERS:
+                continue
             self._next_t[index] = now + rule.interval

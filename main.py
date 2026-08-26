@@ -1052,6 +1052,12 @@ def run(
                         print(f"[HP] still {hp_for_potion:.0%} after recovery -> FLEE")
                         state       = State.FLEE
                         state_start = time.time()
+                        # FLEE never writes the aim vector, so the previous
+                        # frame's direction would still read fresh -- and it
+                        # points at the enemy being fled, so an `aim` rule
+                        # would dash toward it at low HP. Stale the stamp;
+                        # the direction itself stays available.
+                        aim_vec[2]  = 0.0
                     continue
                 potion_window = (
                     HEALTH_POTION_BURST_MIN_HP <= hp_for_potion <= HEALTH_POTION_BURST_MAX_HP
@@ -1097,6 +1103,7 @@ def run(
                           f"{now_loop - hp_low_since:.1f}s -> FLEE")
                     state       = State.FLEE
                     state_start = time.time()
+                    aim_vec[2]  = 0.0   # see the FLEE note above
 
             # ── enemy detection ───────────────────────────────────────────────
             enemy_dots = classify_enemy_dots(minimap)
@@ -1337,25 +1344,35 @@ def run(
             # rules, and the guards that used to be spelled out here live in
             # the runner.
             _zone_entered = zone_entry_armed[0] and now_loop >= zone_transition_until
+            # One freshness answer, used twice. It decides `while_moving`, and it
+            # gates the aim cast below: an `aim` rule on a non-movement trigger
+            # would otherwise be handed a stale vector, _aim_cursor_toward_vector
+            # would refuse it, and no key would be pressed at all.
+            _aim_fresh = ((abs(aim_vec[0]) + abs(aim_vec[1])) > 0
+                          and (now_loop - aim_vec[2]) < AIM_VECTOR_FRESH_SECONDS)
             _skill_state = LoopState(
                 now=now_loop,
                 in_combat=zone_had_attack,
                 enemy_visible=confirmed_enemy_now,
                 hp=hp,
                 zone_entered=_zone_entered,
-                moving=((abs(aim_vec[0]) + abs(aim_vec[1])) > 0
-                        and (now_loop - aim_vec[2]) < AIM_VECTOR_FRESH_SECONDS),
+                moving=_aim_fresh,
                 aim_dx=aim_vec[0], aim_dy=aim_vec[1],
                 busy_until=rightclick_busy_until,
                 last_jump_t=last_jump_t[0],
             )
             for _rule in skill_runner.due(_skill_state):
+                if _rule.style == "aim" and not _aim_fresh:
+                    continue
                 attack_held = cast_skill_rule(_rule, attack_held,
                                               aim_vec[0], aim_vec[1])
                 if _rule.style != "aim":
                     rightclick_busy_until = time.time() + 0.35
-            if _zone_entered:
-                zone_entry_armed[0] = False
+                # Only a rule that actually fired consumes the zone. Clearing
+                # the flag unconditionally lost the zone whenever due() had
+                # early-returned on busy_until.
+                if _rule.trigger == "zone_entry":
+                    zone_entry_armed[0] = False
 
             # Periodic debug snapshot — at this point all detection state is available.
             if _enable_debug_snapshots and (now_loop - last_periodic_debug_t) >= DEBUG_PERIODIC_INTERVAL_SECONDS:

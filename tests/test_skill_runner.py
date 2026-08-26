@@ -137,3 +137,14 @@ def test_defer_all_on_a_fresh_runner_still_delays():
     runner.set_rules([_rule(interval=10.0)])
     runner.defer_all(100.0)
     assert runner.due(_state(now=105.0)) == []
+
+
+def test_defer_all_leaves_reactive_and_movement_rules_alone():
+    """A panic rule must not be pushed out at the moment combat starts, and
+    the movement ability was never touched by the old reset sites."""
+    runner = SkillRunner([_rule(key="q", trigger="hp_below", hp_percent=40, interval=4.0),
+                          _rule(key="r", trigger="while_moving", interval=3.0),
+                          _rule(key="e", trigger="in_combat", interval=10.0)])
+    runner.defer_all(100.0)
+    fired = runner.due(_state(now=100.1, hp=0.2, moving=True, in_combat=True))
+    assert [r.key for r in fired] == ["q", "r"]
