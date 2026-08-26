@@ -144,6 +144,11 @@ from skills import LoopState, SkillRunner, default_rules, parse_rules
 # block runs before the state machine, so it always reads the previous frame's
 # direction; anything older than this means the bot is not moving under its own
 # command, and `while_moving` must not fire.
+#
+# The stamp is real time at the moment the direction was committed, NOT the
+# frame's start: the ATTACK block writes the vector *after* wasd_move_and_attack
+# blocks for up to 1.45s, so a now_loop stamp would already be ~1.2s stale when
+# written and `while_moving` would never hold in ATTACK at all.
 AIM_VECTOR_FRESH_SECONDS = 1.0
 
 
@@ -1960,7 +1965,8 @@ def run(
                     explore_dx, explore_dy = move
 
                 explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
-                aim_vec[0], aim_vec[1], aim_vec[2] = explore_dx, explore_dy, now_loop
+                aim_vec[0], aim_vec[1] = explore_dx, explore_dy
+                aim_vec[2] = time.time()
                 _spd_t = _st.get_tracker()
                 _move_spd = (0.65 if (_spd_t and _spd_t.available
                                        and _st.BUFF_ZEPHYS_GRACE in _spd_t.active_buffs)
@@ -2182,7 +2188,7 @@ def run(
                 )
                 aim_vec[0] = adx if confirmed_enemy_now else attack_move_dx
                 aim_vec[1] = ady if confirmed_enemy_now else attack_move_dy
-                aim_vec[2] = now_loop
+                aim_vec[2] = time.time()
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(attack_move_dx, attack_move_dy, last_jump_t)
 
