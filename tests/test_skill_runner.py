@@ -148,3 +148,11 @@ def test_defer_all_leaves_reactive_and_movement_rules_alone():
     runner.defer_all(100.0)
     fired = runner.due(_state(now=100.1, hp=0.2, moving=True, in_combat=True))
     assert [r.key for r in fired] == ["q", "r"]
+
+
+def test_an_aim_rule_is_suppressed_and_not_burned_when_not_moving():
+    """Aiming needs a direction. Being suppressed must not cost the rule its
+    turn -- the same invariant every other guard in the runner respects."""
+    runner = SkillRunner([_rule(style="aim", trigger="always", interval=10.0)])
+    assert runner.due(_state(now=100.0, moving=False)) == []
+    assert runner.due(_state(now=100.1, moving=True)) != []

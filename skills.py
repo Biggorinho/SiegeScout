@@ -242,6 +242,11 @@ class SkillRunner:
             if rule.style == "tap" and \
                     (state.now - state.last_jump_t) < self._post_jump_delay:
                 continue
+            if rule.style == "aim" and not state.moving:
+                # Aiming needs a direction. Without one the cursor never
+                # moves and no key is tapped, so letting the rule through
+                # would spend its interval on nothing.
+                continue
             self._next_t[index] = state.now + rule.interval
             firing.append(rule)
         return firing

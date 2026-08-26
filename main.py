@@ -1344,10 +1344,10 @@ def run(
             # rules, and the guards that used to be spelled out here live in
             # the runner.
             _zone_entered = zone_entry_armed[0] and now_loop >= zone_transition_until
-            # One freshness answer, used twice. It decides `while_moving`, and it
-            # gates the aim cast below: an `aim` rule on a non-movement trigger
-            # would otherwise be handed a stale vector, _aim_cursor_toward_vector
-            # would refuse it, and no key would be pressed at all.
+            # Is the aim vector still usable? The runner needs this for two
+            # things: `while_moving` triggers, and suppressing any `aim`-style
+            # rule that has no direction to aim along. Both reach it as
+            # LoopState.moving.
             _aim_fresh = ((abs(aim_vec[0]) + abs(aim_vec[1])) > 0
                           and (now_loop - aim_vec[2]) < AIM_VECTOR_FRESH_SECONDS)
             _skill_state = LoopState(
@@ -1362,8 +1362,6 @@ def run(
                 last_jump_t=last_jump_t[0],
             )
             for _rule in skill_runner.due(_skill_state):
-                if _rule.style == "aim" and not _aim_fresh:
-                    continue
                 attack_held = cast_skill_rule(_rule, attack_held,
                                               aim_vec[0], aim_vec[1])
                 if _rule.style != "aim":
