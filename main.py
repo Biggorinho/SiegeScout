@@ -123,7 +123,7 @@ from input_control import (
     sleep_interruptible, wasd_move, backtrack_move,
     explore_move_start, explore_move_stop,
     attack_key_down, attack_key_up,
-    cast_key_skill_safe, cast_movement_ability, cast_skill_rule,
+    cast_skill_rule,
     spin_to_clear_melee,
     tap_key, release_all_inputs,
     left_click_at,
@@ -139,6 +139,12 @@ from combat import (
 )
 from debug_utils import DebugRecorder, FrameCapture
 from skills import LoopState, SkillRunner, default_rules, parse_rules
+
+# How long an aim vector stays usable after a state block wrote it. The skill
+# block runs before the state machine, so it always reads the previous frame's
+# direction; anything older than this means the bot is not moving under its own
+# command, and `while_moving` must not fire.
+AIM_VECTOR_FRESH_SECONDS = 1.0
 
 
 def run(
@@ -342,8 +348,12 @@ def run(
     # further down -- so each state block writes the direction it just chose
     # and the skill block reads the most recent one. During EXPLORE that
     # direction is held for EXPLORE_MOVE_MIN/MAX_SECONDS anyway, so it is
-    # current in practice.
-    aim_vec = [0.0, 0.0]
+    # current in practice. The third slot is the timestamp of that write:
+    # nothing ever resets this vector, so without it `moving` would latch
+    # true after the bot's first step and `while_moving` would degrade into
+    # `always` -- firing the movement ability while looting and while stood
+    # still.
+    aim_vec = [0.0, 0.0, 0.0]
     # Armed at zone start, consumed once by the skill block after the
     # transition freeze. A list so the nested zone-start helper can arm it
     # without a nonlocal, matching last_jump_t / attack_stuck_jump_pref.
@@ -1328,7 +1338,8 @@ def run(
                 enemy_visible=confirmed_enemy_now,
                 hp=hp,
                 zone_entered=_zone_entered,
-                moving=(abs(aim_vec[0]) + abs(aim_vec[1])) > 0,
+                moving=((abs(aim_vec[0]) + abs(aim_vec[1])) > 0
+                        and (now_loop - aim_vec[2]) < AIM_VECTOR_FRESH_SECONDS),
                 aim_dx=aim_vec[0], aim_dy=aim_vec[1],
                 busy_until=rightclick_busy_until,
                 last_jump_t=last_jump_t[0],
@@ -1949,7 +1960,7 @@ def run(
                     explore_dx, explore_dy = move
 
                 explore_held_keys = explore_move_start(explore_dx, explore_dy, explore_held_keys)
-                aim_vec[0], aim_vec[1] = explore_dx, explore_dy
+                aim_vec[0], aim_vec[1], aim_vec[2] = explore_dx, explore_dy, now_loop
                 _spd_t = _st.get_tracker()
                 _move_spd = (0.65 if (_spd_t and _spd_t.available
                                        and _st.BUFF_ZEPHYS_GRACE in _spd_t.active_buffs)
@@ -2171,6 +2182,7 @@ def run(
                 )
                 aim_vec[0] = adx if confirmed_enemy_now else attack_move_dx
                 aim_vec[1] = ady if confirmed_enemy_now else attack_move_dy
+                aim_vec[2] = now_loop
                 if now_loop >= rightclick_busy_until:
                     maybe_jump_with_movement(attack_move_dx, attack_move_dy, last_jump_t)
 
