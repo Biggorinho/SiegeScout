@@ -481,6 +481,18 @@ MAP_SCROLL_SETTLE_SECONDS    = 0.30
 SATANIC_SCAN_MIN_SCORE       = 400.0
 SATANIC_SCAN_MIN_MARGIN      = 150.0
 
+# A safe zone has no hostile mobs -- that is what makes it safe. So a green
+# "Safe Zone" banner read while enemies are still on the minimap is a false
+# positive, and acting on one is expensive: release inputs, press F, wait for
+# a map that never opens, walk a nudge. Live 2026-08-27 the banner fired while
+# the bot was killing ten enemies and kept firing for two minutes (x10
+# nudges), stretching that zone to 153.6s against a 35-50s norm.
+#
+# Safe after a real reset because _do_zone_reset clears last_any_enemy_seen_t,
+# so the legitimate case -- teleported onto the waypoint in the new zone's
+# protected entrance -- reads as "no enemies for ages" and still fires.
+SAFE_ZONE_ENEMY_QUIET_SECONDS = 5.0
+
 FALLBACK_NODE_X_FRAC = 0.36
 FALLBACK_NODE_Y_FRAC = 0.435
 

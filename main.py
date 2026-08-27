@@ -923,7 +923,13 @@ def run(
             # grace keeps a freshly picked zone from being instantly re-reset.
             if not vote_reset_in_progress and now_loop >= safe_zone_recover_until \
                     and (now_loop - zone_started_t) >= 6.0:
-                if is_safe_zone_banner_visible(frame):
+                if (now_loop - last_any_enemy_seen_t) < SAFE_ZONE_ENEMY_QUIET_SECONDS:
+                    # Enemies on the minimap mean this is not the safe zone,
+                    # whatever the banner detector thinks. Zeroing the counter
+                    # rather than just skipping the check keeps a stale frame
+                    # from firing the moment the last enemy dies.
+                    safe_zone_banner_frames = 0
+                elif is_safe_zone_banner_visible(frame):
                     safe_zone_banner_frames += 1
                 else:
                     safe_zone_banner_frames = 0
