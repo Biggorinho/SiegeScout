@@ -487,7 +487,7 @@ class BotUI(tk.Tk):
         brand_text = tk.Frame(brand, bg=BG)
         brand_text.pack(side=tk.LEFT)
         tk.Label(brand_text, text="SiegeScout", bg=BG, fg=FG, font=self.f_title).pack(anchor=tk.W)
-        tk.Label(brand_text, text="by Biggorinho · v1.6", bg=BG, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
+        tk.Label(brand_text, text="by Biggorinho · v1.6.1", bg=BG, fg=FG_MUTE, font=("Consolas", 8)).pack(anchor=tk.W)
 
         status = tk.Frame(header, bg=BG)
         status.pack(side=tk.RIGHT, pady=4)
