@@ -112,3 +112,48 @@ def test_label_not_claimed_for_an_ordinary_zone_line():
 def test_label_not_claimed_for_the_magenta_skull_line():
     """That variant carries no "Satanic" word - colour is its only signal."""
     assert not has_satanic_label("☠Prison Dungeon")
+
+
+# ── never resolve a truncated read to the WRONG zone ─────────────────────────
+# Live 2026-08-27 the HUD OCR degraded to "Satanic Dry" (sim 0.50) and
+# "SatanicFuii Coast" (0.67). Both landed on the right zone via the
+# containment rule, but a low ratio reaching a confident answer is the shape
+# of a bug that resets into the wrong zone -- which is exactly what the user
+# reported seeing. It turns out the matcher is already safe: every ambiguous
+# fragment refuses instead of guessing. These pin that, because the safety
+# comes from the "exactly one hit" rule and a well-meaning edit could drop it.
+
+def test_degraded_live_reads_resolve_to_the_right_zone():
+    import config
+    zones = list(config.ZONE_NODES_WORLD.keys())
+    for text, expected in (
+        ("Satanic TheDevil'sBreach", "The Devil's Breach"),
+        ("Satanic Dry", "Dry Hills"),
+        ("SatanicFuii Coast", "Fuji Coast"),
+        ("Satanic Steam Train", "Steam Train"),
+    ):
+        got, _ratio = match_zone_name(text, zones)
+        assert got == expected, f"{text!r} -> {got!r}"
+
+
+def test_a_shared_first_word_refuses_rather_than_guessing():
+    """"The", "Corrupted", "Abyss" and "Pyramid" each begin several zones. A
+    read truncated to one of them must return None and let the colour scan
+    decide -- picking one at random is how the bot farms the wrong zone."""
+    import config
+    zones = list(config.ZONE_NODES_WORLD.keys())
+    for fragment in ("Satanic The", "Satanic Corrupted", "Satanic Abyss",
+                     "Satanic Pyramid"):
+        got, ratio = match_zone_name(fragment, zones)
+        assert got is None, f"{fragment!r} confidently picked {got!r} ({ratio:.2f})"
+
+
+def test_no_single_word_fragment_ever_picks_a_different_zone():
+    """Exhaustive over the real table: truncating any zone to its first word
+    must yield that zone or nothing -- never a different one."""
+    import config
+    zones = list(config.ZONE_NODES_WORLD.keys())
+    for zone in zones:
+        got, ratio = match_zone_name("Satanic " + zone.split()[0], zones)
+        assert got in (zone, None), \
+            f"{zone!r} truncated resolved to {got!r} ({ratio:.2f})"

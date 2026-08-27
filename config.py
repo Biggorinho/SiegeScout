@@ -402,6 +402,13 @@ CAPTURE_LOOT_NEAR_PX                = _px(40)
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)
 ITEM_DOT_CONFIRM_THRESHOLD          = 2
+# How soon a vanished resource target counts as "disappeared before we could
+# get there" for the resource_target_disappeared_early counter. Was 1.0s,
+# which was too tight to see the thing it exists to measure: every drop in the
+# 2026-08-27 run landed at 1.0-1.6s, so the counter reported 0 while the
+# failure happened ten times in eleven minutes. The counter is how this
+# problem gets tracked, so it has to span it.
+RESOURCE_TARGET_EARLY_DROP_SECONDS  = 2.5
 ITEM_DOT_MATCH_RADIUS_PX            = _px(8)
 ORE_DOT_CONFIRM_THRESHOLD           = 2
 ORE_DOT_MATCH_RADIUS_PX             = _px(8)

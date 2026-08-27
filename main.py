@@ -87,6 +87,7 @@ from config import (
     ENEMY_DOT_CONFIRM_THRESHOLD,
     ENEMY_DOT_MATCH_RADIUS_PX,
     ITEM_DOT_CONFIRM_THRESHOLD,
+    RESOURCE_TARGET_EARLY_DROP_SECONDS,
     ITEM_DOT_MATCH_RADIUS_PX,
     ORE_DOT_CONFIRM_THRESHOLD,
     ORE_DOT_MATCH_RADIUS_PX,
@@ -1507,7 +1508,7 @@ def run(
                             reason = resource_targeter.last_release_reason
                             _rt_age = now_loop - prev_rt_active.acquired_at
                             print(f"[RT] {prev_rt_active.kind} target dropped ({reason}) after {_rt_age:.1f}s")
-                            if reason == "disappeared" and (now_loop - prev_rt_active.acquired_at) < 1.0:
+                            if reason == "disappeared" and _rt_age < RESOURCE_TARGET_EARLY_DROP_SECONDS:
                                 counters.resource_target_disappeared_early += 1
                             elif reason == "timeout":
                                 counters.resource_target_timeout += 1
