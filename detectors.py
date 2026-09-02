@@ -801,6 +801,16 @@ def classify_ore_dots(minimap_bgr):
             continue
         x = int(M["m10"] / M["m00"])
         y = int(M["m01"] / M["m00"])
+        # The player's username prints beside the marker in a cream tone whose
+        # hue (~20) sits inside this mask's gold band, and its letter strokes
+        # pass the pickaxe shape gate. `classify_item_dots` has guarded against
+        # exactly this since the star detector hit the same glyphs; the ore
+        # detector never got the guard, so it kept reporting the name as a
+        # vein at a fixed ~21px from the player -- 80% of every ore dot it
+        # produced over session_20260827-062546, and the nearest dot almost
+        # every frame, so it out-competed real ore for the resource targeter.
+        if _is_player_label(hsv, x, y, cx0, cy0):
+            continue
         _append_dot(x, y, 3, "pickaxe")
 
     return dots

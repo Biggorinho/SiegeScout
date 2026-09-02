@@ -325,3 +325,36 @@ def test_player_label_guard_ignores_cream_far_from_the_player():
     hsv = cv2.cvtColor(mm, cv2.COLOR_BGR2HSV)
     cx, cy = mm.shape[1] // 2, mm.shape[0] // 2
     assert _is_player_label(hsv, 20, 200, cx, cy) is False
+
+
+def test_username_text_is_not_reported_as_ore():
+    """Same phantom as `test_username_text_is_not_reported_as_an_item`, on the
+    other detector. The username renders cream (H~20), which sits squarely
+    inside the ore mask's gold band (ORE_DOT_HUE_LO/HI = 10..26), and the
+    capital 'I' is a vertical bar that passes the pickaxe shape gate — so the
+    ore detector claimed the player's own name as a vein.
+
+    Measured over the 400 minimaps of eval/captures/session_20260827-062546:
+    327 of 400 frames reported ore at a FIXED (dx=-21, dy=-7) from the player,
+    80% of every ore dot the detector produced. Being a fixed ~21px from the
+    player it was also the NEAREST dot almost every frame, and the resource
+    targeter picks the nearest — so it out-competed real ore anywhere else on
+    the map and the bot walked at its own name until the travel timeout.
+    """
+    dots = classify_ore_dots(_fixture("minimap_username_phantom.png"))
+    for x, y, *_ in dots:
+        assert not (85 <= x <= 150 and 95 <= y <= 130), \
+            f"username text reported as ore at ({x},{y})"
+
+
+def test_real_ore_beside_the_player_is_still_detected():
+    """The guard is colour AND position, never position alone: a real vein
+    lying next to the player must survive it, or the fix trades one miss for
+    another."""
+    import numpy as np
+    mm = _fixture("minimap_username_phantom.png").copy()
+    # A vivid orange pickaxe blob right where the username sits.
+    mm[104:113, 93:102] = (10, 130, 240)
+    dots = classify_ore_dots(mm)
+    assert any((x - 97) ** 2 + (y - 108) ** 2 <= 8 * 8 for x, y, *_ in dots), \
+        f"real ore beside the player was discarded; got {dots}"
