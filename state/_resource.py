@@ -135,22 +135,40 @@ class ResourceTargeter:
         # animate (pulse/blink) so the HSV+shape filter can lose them for a
         # frame or two even though they're visually still there.
         dots = item_dots if target.kind == "item" else ore_dots
-        if not self._dot_present(dots, target.pos):
+        match = self._matching_dot(dots, target.pos)
+        if match is None:
             target.consecutive_misses += 1
             if target.consecutive_misses >= self._miss_grace_frames:
                 self.last_release_reason = "disappeared"
                 return None
             return target  # tolerate this frame, keep waiting
         target.consecutive_misses = 0
+        # Follow the dot instead of holding the acquisition position. The
+        # minimap is player-centred, so a stationary world object slides
+        # across it as the player walks -- and walking toward loot is exactly
+        # when its dot travels furthest. A fixed anchor therefore goes stale
+        # under the bot's own movement: once cumulative drift passes
+        # spot_match_radius the dot stops matching and the target is dropped
+        # as "disappeared" while it is still plainly on the minimap. Of 209
+        # item targets re-acquired right after such a drop in debug/bot.log,
+        # 80 landed within 30 px of the dropped anchor (median 19 px) -- the
+        # same dot, one 8 px window too far away. Bounded by the same radius
+        # per frame, so this tracks a drifting dot without latching onto a
+        # different one.
+        target.pos = match
 
         return target
 
-    def _dot_present(self, dots: list, pos: tuple[int, int]) -> bool:
+    def _matching_dot(self, dots: list, pos: tuple[int, int]) -> tuple[int, int] | None:
+        """Nearest dot within `spot_match_radius_px` of `pos`, else None."""
         r2 = self._spot_match_radius_px * self._spot_match_radius_px
+        best = None
+        best_d2 = None
         for d in dots:
-            if (int(d[0]) - pos[0]) ** 2 + (int(d[1]) - pos[1]) ** 2 <= r2:
-                return True
-        return False
+            d2 = (int(d[0]) - pos[0]) ** 2 + (int(d[1]) - pos[1]) ** 2
+            if d2 <= r2 and (best_d2 is None or d2 < best_d2):
+                best, best_d2 = (int(d[0]), int(d[1])), d2
+        return best
 
     def _pick_new(
         self,

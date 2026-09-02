@@ -156,12 +156,22 @@ def test_keeps_target_through_single_miss_frame():
 
 
 def test_keeps_target_through_minor_minimap_jitter():
+    """A dot reported a few px off is still the same target.
+
+    This used to also assert the anchor stayed at the ORIGINAL position, on
+    the reading that the offset was detector jitter worth ignoring. It is not
+    jitter: the minimap is player-centred, so the offset is mostly the
+    player's own movement, and refusing to follow it makes the anchor go
+    stale and the target get dropped mid-approach. See
+    `test_target_follows_its_dot_as_the_player_walks_toward_it`. What this
+    test actually pins -- that a small offset must not drop the target --
+    is unchanged.
+    """
     rt = ResourceTargeter(spot_match_radius_px=8)
     rt.tick(now=1.0, center=(50, 50), item_dots=[[60, 50, 1, "star"]], ore_dots=[])
-    # Same spot reported a few px off — should still be the same target.
     result = rt.tick(now=2.0, center=(50, 50), item_dots=[[63, 52, 1, "star"]], ore_dots=[])
     assert result is not None
-    assert result.pos == (60, 50)   # original pos kept (we don't chase jitter)
+    assert result.pos == (63, 52)   # anchor follows the dot
 
 
 def test_releases_target_after_max_travel_seconds():
@@ -264,3 +274,54 @@ def test_release_reason_cleared_when_new_target_picked():
     assert rt.last_release_reason == "released"
     rt.tick(now=2.0, center=(50, 50), item_dots=[[70, 50, 1, "star"]], ore_dots=[])
     assert rt.last_release_reason is None
+
+
+# ── the minimap is player-centred, so a stationary object MOVES on it ───────
+
+def test_target_follows_its_dot_as_the_player_walks_toward_it():
+    """The anchor must track the dot, not the position it was first seen at.
+
+    The minimap is drawn player-centred, so a stationary world object slides
+    across it whenever the player moves — walking toward loot is exactly when
+    its dot travels furthest. Holding the acquisition position fixed makes the
+    anchor go stale, and once cumulative drift passes spot_match_radius the
+    dot stops matching and the target is dropped as "disappeared" while it is
+    still plainly on the minimap.
+
+    Measured in debug/bot.log: of 209 item targets re-acquired immediately
+    after a "disappeared" drop, 80 landed within 30 px of the dropped anchor
+    (median 19 px) — the same dot, one 8 px window too far away.
+    """
+    rt = ResourceTargeter(spot_match_radius_px=8, miss_grace_frames=3)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[90, 50, 1, "star"]], ore_dots=[])
+    # Player walks in; the dot slides 5 px per frame — never more than the
+    # match radius in one step, but 20 px in total.
+    for i, x in enumerate((85, 80, 75, 70)):
+        result = rt.tick(now=2.0 + i * 0.2, center=(50, 50),
+                         item_dots=[[x, 50, 1, "star"]], ore_dots=[])
+        assert result is not None, f"target dropped after drifting to x={x}"
+        assert result.pos == (x, 50), "anchor did not follow the dot"
+
+
+def test_tracking_does_not_latch_onto_a_different_dot():
+    """Following the dot must stay inside the match radius: a second star
+    20 px away is a different piece of loot, not this one drifting."""
+    rt = ResourceTargeter(spot_match_radius_px=8, miss_grace_frames=3)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[90, 50, 1, "star"]], ore_dots=[])
+    rt.tick(now=2.0, center=(50, 50), item_dots=[[110, 50, 1, "star"]], ore_dots=[])
+    assert rt.active is not None
+    assert rt.active.pos == (90, 50), "anchor jumped to an unrelated dot"
+    assert rt.active.consecutive_misses == 1
+
+
+def test_close_tracking_uses_the_dots_current_position():
+    """`is_close` and the auto-attempt timer must judge against where the dot
+    is now — the whole point of the pickup hand-off."""
+    rt = ResourceTargeter(spot_match_radius_px=8)
+    rt.tick(now=1.0, center=(50, 50), item_dots=[[70, 50, 1, "star"]], ore_dots=[])
+    assert rt.is_close(center=(50, 50), threshold_px=10) is False
+    # The dot slid to 6 px from the player as they walked in.
+    rt.tick(now=2.0, center=(50, 50), item_dots=[[64, 50, 1, "star"]], ore_dots=[])
+    rt.tick(now=2.2, center=(50, 50), item_dots=[[56, 50, 1, "star"]], ore_dots=[])
+    assert rt.active.pos == (56, 50)
+    assert rt.is_close(center=(50, 50), threshold_px=10) is True
