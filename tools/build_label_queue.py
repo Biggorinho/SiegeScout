@@ -17,6 +17,7 @@ threshold is probably empty. The interesting band is in between.
 """
 
 import argparse
+import collections
 import csv
 import glob
 import os
@@ -191,6 +192,94 @@ def stage_minimap(paths):
     print("drag that folder into Roboflow and label ONLY the item stars.")
 
 
+# The 14-class Roboflow schema, in data.yaml order -- pre-annotations must be
+# written with THESE ids or the import lands on the wrong class names.
+RAW_NAMES = ["dungeon", "enemy", "enter", "exit", "itemAngel", "itemBlue",
+             "itemSatan", "oreBlue", "oreCopper", "oreGold", "oreGreen",
+             "oreRuby", "player", "portal"]
+# Deliberately below the models' live threshold. A wrong box is obvious and
+# one keypress to delete; a MISSING box is invisible during labeling and
+# becomes a negative example, which is the failure this whole step exists to
+# prevent. So favour recall and let the human prune.
+PREANNOTATE_CONF = 0.35
+NL = chr(10)
+
+
+def _yolo_rows(dets, class_map, w, h):
+    rows = []
+    for src, dst in class_map.items():
+        for d in dets.get(src) or ():
+            if d["confidence"] < PREANNOTATE_CONF:
+                continue
+            rows.append(f"{RAW_NAMES.index(dst)} {d['x'] / w:.6f} {d['y'] / h:.6f} "
+                        f"{d['width'] / w:.6f} {d['height'] / h:.6f}")
+    return rows
+
+
+def preannotate(cls):
+    """Write model predictions beside the staged images as YOLO labels.
+
+    Roboflow imports a YOLO folder (images/ + labels/ + data.yaml) with the
+    boxes already in place, so the human only adds the item class and fixes
+    what the model got wrong -- instead of hand-boxing every enemy, player
+    marker, portal and vein just to be allowed to add one star.
+
+    That completeness is not optional: anything left unboxed in a labeled
+    frame trains as background, so labeling ONLY items would actively degrade
+    the ore and enemy classes that currently work.
+    """
+    import config
+    from local_inference import OnnxDetector
+
+    queue = OUT_DIR / cls
+    flat = sorted(queue.glob("*.png"))
+    img_dir, lbl_dir = queue / "images", queue / "labels"
+    img_dir.mkdir(exist_ok=True)
+    lbl_dir.mkdir(exist_ok=True)
+    for f in flat:                      # flatten -> YOLO layout, once
+        shutil.move(str(f), img_dir / f.name)
+
+    if cls == "minimap":
+        det = OnnxDetector(config.LOCAL_MINIMAP_MODEL_PATH,
+                           config.LOCAL_MINIMAP_MODEL_CLASSES,
+                           config.LOCAL_MINIMAP_MODEL_INPUT_SIZE,
+                           conf_threshold=PREANNOTATE_CONF)
+        class_map = {n: n for n in config.LOCAL_MINIMAP_MODEL_CLASSES}
+    else:
+        det = OnnxDetector(config.LOCAL_SCREEN_MODEL_PATH,
+                           config.LOCAL_SCREEN_MODEL_CLASSES,
+                           config.LOCAL_SCREEN_MODEL_INPUT_SIZE,
+                           conf_threshold=PREANNOTATE_CONF)
+        # The screen model cannot tell vein colours apart, and it does not
+        # need to: train_screen_local.SCREEN_MAP collapses all five ore names
+        # to one `ore` class anyway. `item` is left out on purpose -- that is
+        # the class the human is here to supply.
+        class_map = {"ore": "oreGold"}
+
+    if not det.available:
+        sys.exit("model not loadable; cannot pre-annotate")
+
+    total = collections.Counter()
+    for img_path in sorted(img_dir.glob("*.png")):
+        img = cv2.imread(str(img_path))
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        rows = _yolo_rows(det.detect(img), class_map, w, h)
+        (lbl_dir / f"{img_path.stem}.txt").write_text(
+            NL.join(rows) + (NL if rows else ""), encoding="utf-8")
+        for r in rows:
+            total[RAW_NAMES[int(r.split()[0])]] += 1
+
+    (queue / "data.yaml").write_text(
+        f"train: images{NL}val: images{NL}nc: {len(RAW_NAMES)}{NL}"
+        f"names: {RAW_NAMES}{NL}", encoding="utf-8")
+    print(f"pre-annotated {len(list(img_dir.glob('*.png')))} images in {queue}")
+    print(f"  boxes written: {dict(total.most_common())}")
+    print("  upload the FOLDER to Roboflow (it reads images/ + labels/ + data.yaml),")
+    print("  then add the item boxes and correct anything the model got wrong.")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--top", type=int, default=250, help="frames to stage")
@@ -198,9 +287,15 @@ def main():
     ap.add_argument("--no-copy", action="store_true", help="write the CSV only")
     ap.add_argument("--from-csv", action="store_true",
                     help="re-stage from an existing ranked.csv, skipping the scan")
+    ap.add_argument("--preannotate", action="store_true",
+                    help="write model predictions as YOLO labels beside the staged images")
     ap.add_argument("--source", default="screen", choices=["screen", "minimap"],
                     help="screen = full loot frames; minimap = minimap crops")
     args = ap.parse_args()
+
+    if args.preannotate:
+        preannotate("minimap" if args.source == "minimap" else args.cls)
+        return
 
     if args.source == "minimap":
         stage_minimap(minimap_candidates(args.top))
