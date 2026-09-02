@@ -39,10 +39,37 @@ RAW_NAMES = ["dungeon", "enemy", "enter", "exit", "itemAngel", "itemBlue",
              "itemSatan", "oreBlue", "oreCopper", "oreGold", "oreGreen",
              "oreRuby", "player", "portal"]
 # The 9 classes with enough real-crop labels to learn. Order == the model's
-# class ids == LOCAL_MINIMAP_MODEL_CLASSES in config.py. Dropped (too few
-# crop labels): itemAngel/itemBlue/itemSatan, oreBlue, oreCopper.
+# Collapse the ore and item subtypes, mirroring train_screen_local.SCREEN_MAP.
+#
+# The bot never reads the subtype -- fusion.ml_ore_dots stamps every ore class
+# with the same tier, and ResourceTargeter never reads tier at all -- so the
+# split bought nothing and cost a great deal. KEEP_CLASSES used to name the
+# five survivors one by one, and `build_crop_dataset` drops any annotation
+# whose class is not listed while KEEPING its image, so every unlisted label
+# trained as background. On the v4 export that was 157 oreCopper, 13
+# itemSatan, 5 itemBlue and 1 oreBlue across 65 of 445 crops -- 15% of the
+# labeled data, teaching the model that copper veins and loot are nothing.
+#
+# Pooled instead: ore 449 (the second-largest class in the set), item 18 --
+# thin, but on par with `enter` (15) and `dungeon` (32), which both train fine.
+MINIMAP_MAP = {
+    "enemy": "enemy", "player": "player", "portal": "portal",
+    "dungeon": "dungeon", "enter": "enter", "exit": "exit",
+    "oreGold": "ore", "oreGreen": "ore", "oreRuby": "ore",
+    "oreBlue": "ore", "oreCopper": "ore",
+    "itemBlue": "item", "itemSatan": "item", "itemAngel": "item",
+}
+# Order == the model's class ids == LOCAL_MINIMAP_MODEL_CLASSES in config.py.
+# Changing this list without retraining and updating config mislabels every
+# detection the bot makes, silently.
 KEEP_CLASSES = ["enemy", "player", "portal", "dungeon", "enter", "exit",
-                "oreGold", "oreGreen", "oreRuby"]
+                "ore", "item"]
+
+
+def build_remap():
+    """raw class id -> output class id, total over RAW_NAMES."""
+    return {RAW_NAMES.index(raw): KEEP_CLASSES.index(dst)
+            for raw, dst in MINIMAP_MAP.items()}
 
 IMGSZ = 480  # static export size - must match LOCAL_MINIMAP_MODEL_INPUT_SIZE
 
@@ -72,7 +99,7 @@ def yolo_line_to_bbox(fields):
 
 def build_crop_dataset(zip_path: Path) -> Path:
     """Extract the export and build a train/val crop dataset split by prefix."""
-    remap = {RAW_NAMES.index(n): i for i, n in enumerate(KEEP_CLASSES)}
+    remap = build_remap()
     tmp = DATASETS_DIR / "_export_extract"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
@@ -144,7 +171,8 @@ def main():
         mosaic=0.0,    # mosaic quarters each image - lethal for tiny dots
         scale=0.3,     # mild zoom jitter only
         degrees=0.0,   # the minimap never rotates
-        hsv_h=0.01,    # ore classes are told apart by HUE - keep jitter tiny
+        hsv_h=0.01,    # classes are told apart by HUE (item rarity, enemy
+                       # red, portal blue) - keep jitter tiny
         workers=2,
         project=str(RUNS_DIR),
         name="minimap",

@@ -53,8 +53,12 @@ def fuse_enemy_dots(heuristic_dots, ml_enemy_dets, merge_dist=6.0,
     return fused
 
 
-# The model splits ore by vein colour; downstream only cares that it is ore.
-_ORE_CLASSES = ("oreGold", "oreGreen", "oreRuby")
+# The retrained minimap model emits one collapsed `ore` class; the per-colour
+# names are the pre-2026-09-03 export and stay accepted so a restored older
+# model still works. Downstream only ever cared that it is ore.
+_ORE_CLASSES = ("ore", "oreGold", "oreGreen", "oreRuby")
+# Tier used by detectors.classify_item_dots for its own star dots.
+_ITEM_TIER = 1
 # Tier used by detectors.classify_ore_dots for its own ore dots.
 _ORE_TIER = 3
 
@@ -127,3 +131,35 @@ def ml_item_tags(ml_dets, min_conf=0.40, merge_dist=8.0):
             continue
         tags.append((x, y, float(conf)))
     return tags
+
+
+def ml_item_dots(ml_dets, min_conf=0.40, merge_dist=4.0, tier=_ITEM_TIER,
+                 kind="ml"):
+    """Minimap item stars from the model, shaped like classify_item_dots.
+
+    Replaces the heuristic rather than adding to it, for the same reason as
+    `ml_ore_dots`: `classify_item_dots` is a precision problem, not a recall
+    one. Over the 400 minimaps of session_20260827-062546 it put 36% of its
+    dots inside the player-label box -- magenta wall linework and the player's
+    own blue marker -- and since ResourceTargeter picks the NEAREST dot, false
+    positives near the player out-compete real loot anywhere else on the map.
+    Adding the model's dots on top would keep every one of those.
+
+    Caveat worth knowing: the item class trained on 10 annotations and scores
+    AP50 0.875 (P 1.000, R 0.835) on 8 validation instances. The precision is
+    what this replacement is buying, and it is the half that held; the recall
+    figure rests on 8 boxes and should not be trusted until there are more
+    labels. `python -m eval.score` on real captures is the honest gate.
+    """
+    if not ml_dets:
+        return []
+    dots = []
+    md2 = merge_dist * merge_dist
+    for det in ml_dets.get("item") or ():
+        if det.get("confidence", 0.0) < min_conf:
+            continue
+        x, y = det["x"], det["y"]
+        if any((x - d[0]) ** 2 + (y - d[1]) ** 2 <= md2 for d in dots):
+            continue
+        dots.append([round(x), round(y), tier, kind])
+    return dots

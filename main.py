@@ -1503,7 +1503,17 @@ def run(
                         and resource_collect_allowed and not confirmed_enemy_now:
                     qte_active = detect_mining_qte_window(frame).get("active", False)
                     if not qte_active:
-                        raw_item_dots = classify_item_dots(minimap) if _enable_loot_items else []
+                        if not _enable_loot_items:
+                            raw_item_dots = []
+                        elif _ml_dets:
+                            # Same rule as ore below: the model replaces the
+                            # heuristic. classify_item_dots put 36% of its dots
+                            # in the player-label box, and the targeter picks
+                            # the nearest dot -- so those false positives beat
+                            # real loot. See fusion.ml_item_dots.
+                            raw_item_dots = fusion.ml_item_dots(_ml_dets)
+                        else:
+                            raw_item_dots = classify_item_dots(minimap)
                         if not _enable_mining:
                             raw_ore_dots = []
                         elif _ml_dets:

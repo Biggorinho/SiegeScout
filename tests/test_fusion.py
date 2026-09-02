@@ -169,3 +169,40 @@ def test_ml_item_tags_no_detections_is_empty():
     from fusion import ml_item_tags
     assert ml_item_tags({}) == []
     assert ml_item_tags({"item": []}) == []
+
+
+# ── minimap item stars from the model ──────────────────────────────────────
+
+def _mmi(x, y, conf=0.9):
+    return {"x": x, "y": y, "width": 6.0, "height": 6.0,
+            "confidence": conf, "class": "item"}
+
+
+def test_ml_item_dots_shape_matches_classify_item_dots():
+    """Callers treat these as `[x, y, tier, kind]`, same as the heuristic."""
+    from fusion import ml_item_dots
+    dots = ml_item_dots({"item": [_mmi(40, 60)]})
+    assert dots == [[40, 60, 1, "ml"]]
+
+
+def test_ml_item_dots_drops_low_confidence():
+    from fusion import ml_item_dots
+    assert ml_item_dots({"item": [_mmi(40, 60, 0.10)]}, min_conf=0.40) == []
+
+
+def test_ml_item_dots_merges_double_boxes_on_one_star():
+    from fusion import ml_item_dots
+    assert len(ml_item_dots({"item": [_mmi(40, 60), _mmi(42, 61)]}, merge_dist=4.0)) == 1
+
+
+def test_ml_item_dots_ignores_other_classes():
+    from fusion import ml_item_dots
+    assert ml_item_dots({"ore": [_mmi(40, 60)], "enemy": [_mmi(10, 10)]}) == []
+
+
+def test_ml_ore_dots_reads_the_collapsed_ore_class():
+    """The minimap model used to split ore by vein colour; it now emits one
+    `ore` class (training/train_minimap_local.MINIMAP_MAP). The legacy names
+    stay accepted so an older exported model still works."""
+    from fusion import ml_ore_dots
+    assert ml_ore_dots({"ore": [dict(_mmi(70, 80), **{"class": "ore"})]}) == [[70, 80, 3, "ml"]]

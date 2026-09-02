@@ -72,9 +72,14 @@ LOCAL_MINIMAP_MODEL_PATH = os.path.join(_MODELS_DIR, "minimap.onnx")
 # Order must match the training notebook's KEEP_CLASSES (= the model's names).
 # Trained on 249 real minimap crops the user labeled in Roboflow (incl. an
 # `enemy` class the heuristics detect poorly — baseline enemy recall ~0.34).
+# Ore and item subtypes are collapsed (training/train_minimap_local.MINIMAP_MAP):
+# the bot never read the subtype, and splitting them pushed oreCopper, oreBlue
+# and every item class out of training entirely -- where they became background
+# negatives. Retrained 2026-09-03 on the v4 export: mAP50 0.934, ore AP50 0.960,
+# item 0.875. ORDER IS THE MODEL'S CLASS IDS -- see
+# tests/test_train_minimap_local.py::test_output_classes_match_the_shipped_config.
 LOCAL_MINIMAP_MODEL_CLASSES = [
-    "enemy", "player", "portal", "dungeon", "enter", "exit",
-    "oreGold", "oreGreen", "oreRuby",
+    "enemy", "player", "portal", "dungeon", "enter", "exit", "ore", "item",
 ]
 LOCAL_MINIMAP_MODEL_INPUT_SIZE = 480  # static export size; must match training
 LOCAL_MINIMAP_MODEL_CONF = 0.40
