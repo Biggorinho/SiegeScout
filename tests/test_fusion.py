@@ -3,6 +3,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fusion import fuse_enemy_dots
@@ -122,3 +124,48 @@ def test_input_is_not_mutated():
     dets = {"oreGold": [_det(10, 10)]}
     ml_ore_dots(dets)
     assert dets == {"oreGold": [_det(10, 10)]}
+
+
+# ── on-screen item tags from the screen model ──────────────────────────────
+
+def _sml(x, y, conf=0.9, w=40.0, h=14.0):
+    return {"x": x, "y": y, "width": w, "height": h,
+            "confidence": conf, "class": "item"}
+
+
+def test_ml_item_tags_shape_matches_find_item_tags_on_screen():
+    """Callers unpack `(x, y, score)`; ML tags must drop straight in."""
+    from fusion import ml_item_tags
+    tags = ml_item_tags({"item": [_sml(300, 200, 0.8)]})
+    assert len(tags) == 1
+    x, y, score = tags[0]
+    assert (x, y) == (300, 200)
+    assert isinstance(x, int) and isinstance(y, int)
+    assert score == pytest.approx(0.8)
+
+
+def test_ml_item_tags_drops_low_confidence():
+    from fusion import ml_item_tags
+    assert ml_item_tags({"item": [_sml(10, 10, 0.10)]}, min_conf=0.40) == []
+
+
+def test_ml_item_tags_ignores_other_classes():
+    """The screen model also carries `ore`; only `item` is loot to click."""
+    from fusion import ml_item_tags
+    dets = {"ore": [dict(_sml(50, 50), **{"class": "ore"})], "item": []}
+    assert ml_item_tags(dets) == []
+
+
+def test_ml_item_tags_merges_overlapping_boxes_into_one_click():
+    """Two boxes on one label must not become two clicks on the same loot."""
+    from fusion import ml_item_tags
+    tags = ml_item_tags({"item": [_sml(200, 100, 0.9), _sml(203, 102, 0.7)]},
+                        merge_dist=8.0)
+    assert len(tags) == 1
+    assert tags[0][2] == pytest.approx(0.9)   # the stronger box survives
+
+
+def test_ml_item_tags_no_detections_is_empty():
+    from fusion import ml_item_tags
+    assert ml_item_tags({}) == []
+    assert ml_item_tags({"item": []}) == []

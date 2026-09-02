@@ -327,6 +327,28 @@ def run(
         screen_ml = _sm if _sm.available else None
         print(f"[SCREEN_ML] enabled; detector "
               f"{'ready' if screen_ml else 'unavailable — heuristics only'}")
+
+    def _item_tags_on_screen(frame_bgr):
+        """On-screen loot labels — model first, heuristic only as fallback.
+
+        The screen model has carried an `item` class trained on the user's own
+        loot frames since it was added, but was only ever asked about ore, so
+        every pickup ran on `find_item_tags_on_screen` — a red/green/cyan blob
+        mask that returns a mean of 93 hits per frame (all 300 captured loot
+        frames had >= 10). Both pickup sites click the hit nearest screen
+        centre, so the bot clicked fire particles and enemy auras while the
+        real label sat at the edge of the screen; that is the
+        `explore_stall_loot_tag` signal (598 stalled frames against 2 items
+        collected in the last session report). Same model-replaces-heuristic
+        rule as ore, for the same reason — see fusion.ml_item_tags.
+        """
+        if screen_ml is not None:
+            return fusion.ml_item_tags(
+                screen_ml.detect(frame_bgr),
+                min_conf=config.LOCAL_SCREEN_MODEL_CONF,
+            )
+        return find_item_tags_on_screen(frame_bgr)
+
     minimap_mode                 = "small"
     last_attack_activity_t       = time.time()
     zone_had_attack              = False
@@ -1633,7 +1655,7 @@ def run(
                             # Item: LOOT by clicking its coloured name/tier label — the
                             # character then auto-walks onto it and picks it up. Don't issue
                             # any other input until the label is gone, or it cancels the walk.
-                            tags = find_item_tags_on_screen(frame)
+                            tags = _item_tags_on_screen(frame)
                             if tags:
                                 px, py = SCREEN_W // 2, SCREEN_H // 2
                                 tx, ty, _ = min(tags, key=lambda t: (t[0]-px)**2 + (t[1]-py)**2)
@@ -1644,7 +1666,7 @@ def run(
                                     if stop_event is not None and stop_event.is_set():
                                         break
                                     _pf = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
-                                    if not find_item_tags_on_screen(_pf):
+                                    if not _item_tags_on_screen(_pf):
                                         break  # label gone = picked up
                                     sleep_interruptible(0.15)
                                 resource_targeter.mark_attempted(now_loop)
@@ -1810,7 +1832,7 @@ def run(
                     elif (now_loop >= loot_scan_blocked_until
                           and (now_loop - last_loot_items_scan_t)
                           >= LOOT_ITEMS_SCAN_INTERVAL_SECONDS):
-                        items_on_screen = find_item_tags_on_screen(frame)
+                        items_on_screen = _item_tags_on_screen(frame)
                         last_loot_items_scan_t = now_loop
 
                         if items_on_screen:

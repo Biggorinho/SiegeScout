@@ -89,3 +89,41 @@ def ml_ore_dots(ml_dets, min_conf=0.40, merge_dist=4.0, tier=_ORE_TIER,
                 continue
             dots.append([round(x), round(y), tier, kind])
     return dots
+
+
+def ml_item_tags(ml_dets, min_conf=0.40, merge_dist=8.0):
+    """On-screen loot labels from the screen model, shaped like
+    `detectors.find_item_tags_on_screen` output — ``(x, y, score)`` tuples,
+    strongest first.
+
+    Replaces the heuristic for the same reason `ml_ore_dots` does, only more
+    starkly: `find_item_tags_on_screen` masks any red/green/cyan blob, and
+    over the 300 captured loot frames it returned a mean of 93 "tags" per
+    frame — every one of the 300 frames had at least 10. Both pickup sites
+    click the tag nearest screen centre, so what got clicked was whatever fire
+    particle, enemy aura or HUD glyph happened to sit near the crosshair while
+    the real label sat at the edge of the screen. Clicking a label that never
+    resolves keeps it on screen, which is the `explore_stall_loot_tag` signal
+    that dominated the last session report (598 stalled frames, 2 items
+    actually collected).
+
+    The screen model carries an `item` class trained on the user's own loot
+    frames and was already being loaded — it was just never asked about items,
+    only ore.
+    """
+    if not ml_dets:
+        return []
+    tags = []
+    md2 = merge_dist * merge_dist
+    for det in sorted(ml_dets.get("item") or (),
+                      key=lambda d: d.get("confidence", 0.0), reverse=True):
+        conf = det.get("confidence", 0.0)
+        if conf < min_conf:
+            continue
+        x, y = int(round(det["x"])), int(round(det["y"]))
+        # One label can trip two boxes; keep the stronger, or the bot clicks
+        # the same loot twice and cancels its own auto-walk.
+        if any((x - tx) ** 2 + (y - ty) ** 2 <= md2 for tx, ty, _ in tags):
+            continue
+        tags.append((x, y, float(conf)))
+    return tags
