@@ -60,3 +60,4 @@ calibration/
 
 # Zone spawn survey captures (large, regenerable via tools/survey_zone_spawns.py)
 spawn_survey/
+training/label_queue/
