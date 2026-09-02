@@ -390,3 +390,35 @@ class FrameCapture:
         self._loot_last_save = now
         self._loot_saved += 1
         return path
+
+
+def loot_capture_reason(now, kill_capture_until, center, item_dots, ore_dots,
+                        near_px, capture_on_ore):
+    """Why this frame is worth saving for on-screen loot labeling, or None.
+
+    The original gate fired whenever an ore OR item dot sat within `near_px`
+    on the minimap. Ore is far more common than loot, so it ate the capture
+    budget: ranking 250 candidates out of 3.5k captured frames surfaced TWO
+    with a labelable item, while ore vein text was on frame after frame. The
+    screen model already has 214 world-size ore annotations against 10 item
+    ones, so ore no longer earns capture budget -- `capture_on_ore` keeps that
+    reversible.
+
+    The post-kill window is the strongest trigger and deliberately needs no
+    detector at all: loot drops when something dies, so its label is on screen
+    in the seconds after a kill. Every detector-based trigger is circular here
+    -- the on-screen item detector is the thing these frames exist to train.
+    """
+    if now < kill_capture_until:
+        return "post_kill"
+    r2 = near_px * near_px
+    cx, cy = center
+
+    def _near(dots):
+        return any((int(d[0]) - cx) ** 2 + (int(d[1]) - cy) ** 2 <= r2 for d in dots)
+
+    if _near(item_dots):
+        return "item_dot"
+    if capture_on_ore and _near(ore_dots):
+        return "ore_dot"
+    return None

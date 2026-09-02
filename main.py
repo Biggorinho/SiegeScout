@@ -140,7 +140,7 @@ from combat import (
     undo_esc_if_pause_menu_opened, pause_menu_stack_confirmed,
     handle_stray_world_map, safe_zone_walk_delta,
 )
-from debug_utils import DebugRecorder, FrameCapture
+from debug_utils import loot_capture_reason, DebugRecorder, FrameCapture
 from skills import LoopState, SkillRunner, default_rules, parse_rules
 
 # How long an aim vector stays usable after a state block wrote it. The skill
@@ -268,6 +268,7 @@ def run(
         loot_max=config.CAPTURE_LOOT_MAX,
     )
     last_periodic_debug_t        = 0.0
+    loot_kill_capture_until      = 0.0
     counters                     = DetectionCounters(zone_started_at=time.time())
     enemy_confidence             = TemporalDotConfidence(
         match_radius_px=ENEMY_DOT_MATCH_RADIUS_PX,
@@ -704,6 +705,19 @@ def run(
                 continue
 
             frame = cv2.cvtColor(np.array(sct.grab(full_mon)), cv2.COLOR_BGRA2BGR)
+
+            # Post-kill loot capture. It sits here rather than with the
+            # dot-driven capture below because the kill hands control to
+            # EXPLORE with `explore_pause_until` set, and that pause
+            # `continue`s before the resource block ever runs -- which is
+            # exactly the window the loot label is on screen in. The dot
+            # lists are not computed yet at this point, so only the
+            # post-kill reason can fire here; save_loot_frame is
+            # rate-limited and capped, so overlapping is harmless.
+            if config.CAPTURE_LOOT_FRAMES and loot_capture_reason(
+                    time.time(), loot_kill_capture_until, (0, 0), [], [],
+                    config.CAPTURE_LOOT_NEAR_PX, config.CAPTURE_LOOT_ON_ORE):
+                frame_capture.save_loot_frame(time.time(), frame)
 
             # Read HP early so the death-screen gate uses the current frame.
             hp = get_hp_percent(frame)
@@ -1508,11 +1522,12 @@ def run(
                         # Capture a full frame for on-screen resource labeling
                         # only when an ore/item dot is close to the player on
                         # the minimap (so the resource is actually on screen).
-                        if config.CAPTURE_LOOT_FRAMES:
-                            _near = config.CAPTURE_LOOT_NEAR_PX
-                            if any(dot_distance(d, center) <= _near for d in raw_ore_dots) or \
-                               any(dot_distance(d, center) <= _near for d in raw_item_dots):
-                                frame_capture.save_loot_frame(now_loop, frame)
+                        if config.CAPTURE_LOOT_FRAMES and loot_capture_reason(
+                                now_loop, loot_kill_capture_until, center,
+                                raw_item_dots, raw_ore_dots,
+                                config.CAPTURE_LOOT_NEAR_PX,
+                                config.CAPTURE_LOOT_ON_ORE):
+                            frame_capture.save_loot_frame(now_loop, frame)
                         if (raw_item_dots or raw_ore_dots) and (now_loop - last_resource_log_t) >= 1.0:
                             print(f"[LOOT] minimap: {len(raw_item_dots)} item(s) {len(raw_ore_dots)} ore on map")
                             last_resource_log_t = now_loop
@@ -2151,6 +2166,9 @@ def run(
                         attack_key_up()
                         attack_held = False
                     print("Enemy dead -> EXPLORE")
+                    # Loot is on screen NOW -- open the capture window.
+                    loot_kill_capture_until = (
+                        time.time() + config.CAPTURE_LOOT_AFTER_KILL_SECONDS)
                     state = State.EXPLORE
                     explore_pause_until = time.time() + random.uniform(
                         POST_KILL_SCAN_MIN_SECONDS, POST_KILL_SCAN_MAX_SECONDS)

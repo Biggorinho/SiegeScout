@@ -398,6 +398,17 @@ CAPTURE_LOOT_MAX                    = 300
 # labeling. Gating on the reliable minimap proximity (not the noisy on-screen
 # heuristic) avoids the false-positive frames. ~2x the 18px pickup distance.
 CAPTURE_LOOT_NEAR_PX                = _px(40)
+# Keep capturing for this long after a kill. Loot drops when something dies,
+# so its on-screen label is up in the seconds that follow -- the one trigger
+# that needs no detector, which matters because the on-screen item detector is
+# exactly what these frames exist to train.
+CAPTURE_LOOT_AFTER_KILL_SECONDS     = 6.0
+# Ore proximity used to trigger capture too, and ore is far more common than
+# loot: ranking 250 candidates out of 3.5k captured frames surfaced TWO with a
+# labelable item. The screen model has 214 world-size ore annotations against
+# 10 item ones, so ore no longer earns capture budget. Flip back to True if
+# ore ever needs more data.
+CAPTURE_LOOT_ON_ORE                 = False
 
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)

@@ -114,3 +114,49 @@ def test_loot_capture_skips_empty_frame(tmp_path):
     cap = _make_loot(tmp_path)
     assert cap.save_loot_frame(1.0, None) is None
     assert cap.save_loot_frame(1.0, np.zeros((0, 0, 3), np.uint8)) is None
+
+
+# ── which frames are worth saving for on-screen loot labeling ───────────────
+
+from debug_utils import loot_capture_reason
+
+
+def test_post_kill_window_is_a_reason_on_its_own():
+    """Loot drops on kill, so the label is on screen right then. This is the
+    only trigger that does not depend on a detector, which matters because the
+    on-screen item detector is the thing being trained."""
+    assert loot_capture_reason(
+        now=10.0, kill_capture_until=14.0, center=(117, 115),
+        item_dots=[], ore_dots=[], near_px=40, capture_on_ore=False) == "post_kill"
+
+
+def test_outside_the_kill_window_a_near_item_dot_still_counts():
+    assert loot_capture_reason(
+        now=20.0, kill_capture_until=14.0, center=(117, 115),
+        item_dots=[[130, 120, 1, "star"]], ore_dots=[], near_px=40,
+        capture_on_ore=False) == "item_dot"
+
+
+def test_a_far_item_dot_is_not_a_reason():
+    assert loot_capture_reason(
+        now=20.0, kill_capture_until=0.0, center=(117, 115),
+        item_dots=[[10, 10, 1, "star"]], ore_dots=[], near_px=40,
+        capture_on_ore=False) is None
+
+
+def test_ore_alone_no_longer_earns_capture_budget():
+    """Ore proximity used to trigger capture, and ore is far more common than
+    loot: of 250 frames ranked out of 3.5k captures the user found TWO with a
+    labelable item, while ore vein labels were everywhere. Ore already has 214
+    on-screen annotations; items have 10."""
+    assert loot_capture_reason(
+        now=20.0, kill_capture_until=0.0, center=(117, 115),
+        item_dots=[], ore_dots=[[130, 120, 3, "pickaxe"]], near_px=40,
+        capture_on_ore=False) is None
+
+
+def test_ore_capture_can_be_switched_back_on():
+    assert loot_capture_reason(
+        now=20.0, kill_capture_until=0.0, center=(117, 115),
+        item_dots=[], ore_dots=[[130, 120, 3, "pickaxe"]], near_px=40,
+        capture_on_ore=True) == "ore_dot"
