@@ -266,6 +266,7 @@ def run(
         loot_enabled=config.CAPTURE_LOOT_FRAMES,
         loot_interval_seconds=config.CAPTURE_LOOT_INTERVAL_SECONDS,
         loot_max=config.CAPTURE_LOOT_MAX,
+        loot_reason_max=config.CAPTURE_LOOT_REASON_MAX,
     )
     last_periodic_debug_t        = 0.0
     loot_kill_capture_until      = 0.0
@@ -714,10 +715,12 @@ def run(
             # lists are not computed yet at this point, so only the
             # post-kill reason can fire here; save_loot_frame is
             # rate-limited and capped, so overlapping is harmless.
-            if config.CAPTURE_LOOT_FRAMES and loot_capture_reason(
-                    time.time(), loot_kill_capture_until, (0, 0), [], [],
-                    config.CAPTURE_LOOT_NEAR_PX, config.CAPTURE_LOOT_ON_ORE):
-                frame_capture.save_loot_frame(time.time(), frame)
+            _loot_reason = loot_capture_reason(
+                time.time(), loot_kill_capture_until, (0, 0), [], [],
+                config.CAPTURE_LOOT_NEAR_PX, config.CAPTURE_LOOT_ON_ORE)
+            if config.CAPTURE_LOOT_FRAMES and _loot_reason:
+                frame_capture.save_loot_frame(time.time(), frame,
+                                              reason=_loot_reason)
 
             # Read HP early so the death-screen gate uses the current frame.
             hp = get_hp_percent(frame)
@@ -1532,12 +1535,14 @@ def run(
                         # Capture a full frame for on-screen resource labeling
                         # only when an ore/item dot is close to the player on
                         # the minimap (so the resource is actually on screen).
-                        if config.CAPTURE_LOOT_FRAMES and loot_capture_reason(
-                                now_loop, loot_kill_capture_until, center,
-                                raw_item_dots, raw_ore_dots,
-                                config.CAPTURE_LOOT_NEAR_PX,
-                                config.CAPTURE_LOOT_ON_ORE):
-                            frame_capture.save_loot_frame(now_loop, frame)
+                        _loot_reason = loot_capture_reason(
+                            now_loop, loot_kill_capture_until, center,
+                            raw_item_dots, raw_ore_dots,
+                            config.CAPTURE_LOOT_NEAR_PX,
+                            config.CAPTURE_LOOT_ON_ORE)
+                        if config.CAPTURE_LOOT_FRAMES and _loot_reason:
+                            frame_capture.save_loot_frame(now_loop, frame,
+                                                          reason=_loot_reason)
                         if (raw_item_dots or raw_ore_dots) and (now_loop - last_resource_log_t) >= 1.0:
                             print(f"[LOOT] minimap: {len(raw_item_dots)} item(s) {len(raw_ore_dots)} ore on map")
                             last_resource_log_t = now_loop

@@ -34,7 +34,6 @@ py-modules = [
     "config",
     "detectors",
     "input_control",
-    "license",
     "minimap",
     "pathfinding",
     "state",

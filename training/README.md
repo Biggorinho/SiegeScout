@@ -4,11 +4,17 @@ Produces the local ONNX models consumed by `local_inference.OnnxDetector`.
 Spec: `docs/superpowers/specs/2026-07-10-cv-recognition-improvements-design.md`
 (§2 model pipeline, rollout step 4).
 
+Contributors who want to improve detection should start with the
+[contribution guide](../CONTRIBUTING.md). It covers safe data sharing,
+evaluation expectations, and what to include in a model pull request.
+
 ## Minimap model
 
-**Dataset:** `minimapVision 2.v3i.yolov12.zip` (project root) — our own
-Roboflow project `test-jmbou/minimapvision-2` v3, CC BY 4.0. 76 images,
-44/24/8 split. Local-only workflow — no paid Roboflow usage.
+**Dataset:** our own
+[Roboflow project](https://universe.roboflow.com/test-jmbou/minimapvision-2),
+version 3, CC BY 4.0. It contains 76 images with a 44/24/8 split. The
+training export is intentionally not stored in this repository; download or
+export it from Roboflow when reproducing training.
 
 The images are full 1920×1080 screenshots **downscaled to 800×600**, mostly
 with the large zone-map overlay open; labeled map dots are ~5×7 px. Prep

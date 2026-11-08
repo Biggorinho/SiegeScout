@@ -302,6 +302,7 @@ class FrameCapture:
         loot_enabled: bool = False,
         loot_interval_seconds: float = 1.5,
         loot_max: int = 300,
+        loot_reason_max: dict | None = None,
     ) -> None:
         self._enabled = bool(enabled)
         self._base_dir = str(base_dir)
@@ -319,6 +320,9 @@ class FrameCapture:
         self._loot_last_save: float = -1e9
         self._loot_saved = 0
         self._loot_cap_logged = False
+        self._loot_reason_max = dict(loot_reason_max or {})
+        self._loot_by_reason: dict[str, int] = {}
+        self._loot_reason_capped: set = set()
 
     def maybe_save(self, now: float, frame_bgr, minimap_bgr) -> str | None:
         """Save a frame+minimap pair if the interval elapsed. Returns frame path."""
@@ -354,7 +358,7 @@ class FrameCapture:
         self._saved_pairs += 1
         return frame_path
 
-    def save_loot_frame(self, now: float, frame_bgr) -> str | None:
+    def save_loot_frame(self, now: float, frame_bgr, reason: str | None = None) -> str | None:
         """Save the full frame to a loot/ subdir when resources are on screen.
 
         A targeted dataset (full frames only, no minimap) for labeling an
@@ -368,6 +372,18 @@ class FrameCapture:
             if not self._loot_cap_logged:
                 print(f"[LOOTCAP] reached {self._loot_max} loot frames — stopped")
                 self._loot_cap_logged = True
+            return None
+        # Per-trigger quota. Without it the common trigger starves the rare
+        # one: the post-kill window fires on every kill, and at 51 zones/hour
+        # it spent the whole 300-frame budget in the first 23 minutes of an
+        # 11.6-hour run — so the remaining 11.2 hours, including every moment
+        # the bot stood beside an item, recorded nothing at all.
+        limit = self._loot_reason_max.get(reason)
+        if limit is not None and self._loot_by_reason.get(reason, 0) >= limit:
+            if reason not in self._loot_reason_capped:
+                print(f"[LOOTCAP] '{reason}' quota {limit} reached — "
+                      f"other triggers keep their budget")
+                self._loot_reason_capped.add(reason)
             return None
         if (now - self._loot_last_save) < self._loot_interval:
             return None
@@ -389,6 +405,7 @@ class FrameCapture:
             return None
         self._loot_last_save = now
         self._loot_saved += 1
+        self._loot_by_reason[reason] = self._loot_by_reason.get(reason, 0) + 1
         return path
 
 

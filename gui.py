@@ -21,7 +21,6 @@ from tkinter import font as tkfont
 from PIL import Image, ImageTk
 
 import config
-import license as _lic
 import stats_tracker as _stats
 from skills import (STYLES, TRIGGERS, validate_key, default_rules,
                      parse_rules, rules_from_settings, rules_to_json)
@@ -236,10 +235,6 @@ class BotUI(tk.Tk):
         self._orig_stdout = sys.stdout
         self._orig_stderr = sys.stderr
         self._reset_count = 0
-        self._license_valid       = False
-        self._license_error_lbl   = None   # tk.Label | None
-        self._license_entry        = None   # tk.Entry | None
-        self._license_activate_btn = None   # HoverButton | None
         self._cta_container        = None   # tk.Frame | None
         self._runtime_sec = 0
         self._runtime_job = None
@@ -270,7 +265,6 @@ class BotUI(tk.Tk):
         self.after(80, self._poll_log)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.geometry("560x980")
-        self.after(50, self._init_license)
 
     def _switch_row(self, parent, label, default, enabled=True, soon=False):
         row = tk.Frame(parent, bg=SURFACE)
@@ -644,84 +638,6 @@ class BotUI(tk.Tk):
         self._runtime_lbl.pack(side=tk.LEFT)
         tk.Label(footer, text="emergency stop  F8", bg=BG, fg=FG_MUTE, font=("Consolas", 9)).pack(side=tk.RIGHT)
 
-    def _init_license(self):
-        import threading
-        key = _lic.get_saved_key()
-        if key is None:
-            self._show_license_panel()
-        else:
-            self._cta.set_style("Checking license…", bg=SURFACE, fg=FG_MUTE, hover_bg=SURFACE)
-            threading.Thread(
-                target=lambda: self.after(0, self._on_license_result, *_lic.validate_license(key)),
-                daemon=True,
-            ).start()
-
-    def _show_license_panel(self):
-        self._cta.pack_forget()
-        panel = tk.Frame(self._cta_container, bg=BG)
-        panel.pack(fill=tk.X)
-        tk.Label(panel, text="Enter your SiegeScout license key",
-                 bg=BG, fg=FG_MUTE, font=self.f_ui).pack(anchor=tk.W, pady=(0, 4))
-        row = tk.Frame(panel, bg=BG)
-        row.pack(fill=tk.X)
-        self._license_entry = tk.Entry(
-            row, font=self.f_mono, bg=SURFACE, fg=FG,
-            insertbackground=FG, relief=tk.FLAT, bd=4, width=28,
-        )
-        self._license_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6)
-        self._license_activate_btn = HoverButton(
-            row, text="Activate", command=self._activate_license,
-            bg=GREEN, fg="#14341b", hover_bg="#7fd46f",
-            pady=6, padx=12, font=self.f_ui_bold,
-        )
-        self._license_activate_btn.pack(side=tk.LEFT, padx=(8, 0))
-        self._license_error_lbl = tk.Label(panel, text="", bg=BG, fg=RED, font=self.f_ui)
-        self._license_error_lbl.pack(anchor=tk.W, pady=(4, 0))
-
-    def _activate_license(self):
-        import threading
-        key = (self._license_entry.get() if self._license_entry else "").strip()
-        if self._license_error_lbl:
-            self._license_error_lbl.config(text="")
-        if self._license_activate_btn:
-            self._license_activate_btn.set_style("Checking…", bg=SURFACE, fg=FG_MUTE, hover_bg=SURFACE)
-        def _run():
-            ok, msg = _lic.validate_license(key)
-            if ok:
-                _lic.save_key(key)
-            self.after(0, self._on_license_result, ok, msg)
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _on_license_result(self, ok: bool, msg: str):
-        if ok:
-            self._license_valid = True
-            for w in self._cta_container.winfo_children():
-                w.destroy()
-            self._cta = HoverButton(
-                self._cta_container, text="▶  Start Bot", command=self._toggle_bot,
-                bg=GREEN, fg="#14341b", hover_bg="#7fd46f",
-                pady=12, padx=16, font=self.f_cta,
-            )
-            self._cta.pack(fill=tk.X, expand=True)
-            self._license_entry = None
-            self._license_activate_btn = None
-            self._license_error_lbl = None
-            self._push_log("License activated ✓", "ok")
-        else:
-            self._push_log(f"License error: {msg}", "err")
-            if self._license_entry is not None:
-                if self._license_activate_btn:
-                    self._license_activate_btn.set_style(
-                        "Activate", bg=GREEN, fg="#14341b", hover_bg="#7fd46f"
-                    )
-                if self._license_error_lbl:
-                    self._license_error_lbl.config(text=msg)
-            else:
-                self._cta.set_style("▶  Start Bot", bg=GREEN, fg="#14341b", hover_bg="#7fd46f")
-                self._show_license_panel()
-                if self._license_error_lbl:
-                    self._license_error_lbl.config(text=msg)
-
     def _toggle_bot(self):
         if self._bot_thread and self._bot_thread.is_alive():
             self._stop_bot()
@@ -804,9 +720,6 @@ class BotUI(tk.Tk):
                 self._add_skill_row(rule)
 
     def _start_bot(self):
-        if not self._license_valid:
-            self._push_log("No valid license — activate first", "err")
-            return
         import main as _main
 
         self._stop_event = threading.Event()

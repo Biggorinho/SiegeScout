@@ -160,3 +160,41 @@ def test_ore_capture_can_be_switched_back_on():
         now=20.0, kill_capture_until=0.0, center=(117, 115),
         item_dots=[], ore_dots=[[130, 120, 3, "pickaxe"]], near_px=40,
         capture_on_ore=True) == "ore_dot"
+
+
+# ── per-trigger quota ───────────────────────────────────────────────────────
+
+def _make_quota_loot(tmp_path, reason_max):
+    return FrameCapture(
+        enabled=False, base_dir=str(tmp_path), interval_seconds=0.0,
+        max_pairs=0, loot_enabled=True, loot_interval_seconds=0.0,
+        loot_max=100, loot_reason_max=reason_max,
+    )
+
+
+def test_post_kill_cannot_eat_the_whole_loot_budget(tmp_path):
+    """The 2026-09-03 run is the reason this exists: the post-kill window
+    fires on EVERY kill, and at 51 zones/hour it burned all 300 frames in 23
+    minutes of an 11.6-hour session. The remaining 11.2 hours captured
+    nothing -- including every moment the bot stood next to an item, which is
+    the only material that would have been worth having."""
+    fc = _make_quota_loot(tmp_path, {"post_kill": 2, "item_dot": 10})
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    saved = [fc.save_loot_frame(i, frame, reason="post_kill") for i in range(5)]
+    assert sum(p is not None for p in saved) == 2
+
+
+def test_the_rare_trigger_keeps_its_quota_after_the_common_one_is_spent(tmp_path):
+    fc = _make_quota_loot(tmp_path, {"post_kill": 1, "item_dot": 3})
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    for i in range(5):
+        fc.save_loot_frame(i, frame, reason="post_kill")
+    saved = [fc.save_loot_frame(10 + i, frame, reason="item_dot") for i in range(5)]
+    assert sum(p is not None for p in saved) == 3
+
+
+def test_reason_without_a_quota_is_only_bound_by_the_overall_cap(tmp_path):
+    fc = _make_quota_loot(tmp_path, {"post_kill": 1})
+    frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    saved = [fc.save_loot_frame(i, frame, reason="item_dot") for i in range(4)]
+    assert sum(p is not None for p in saved) == 4

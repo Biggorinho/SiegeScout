@@ -414,6 +414,14 @@ CAPTURE_LOOT_AFTER_KILL_SECONDS     = 6.0
 # 10 item ones, so ore no longer earns capture budget. Flip back to True if
 # ore ever needs more data.
 CAPTURE_LOOT_ON_ORE                 = False
+# Per-trigger quota inside CAPTURE_LOOT_MAX. The post-kill window fires on
+# EVERY kill, and at 51 zones/hour it spent the entire 300-frame budget in the
+# first 23 minutes of an 11.6-hour run -- the other 11.2 hours recorded
+# nothing, including every moment the bot stood beside an item. Those moments
+# are the only material worth having, and they are rare (99 frames with an
+# item dot across that whole run), so they get the bulk of the budget and the
+# flooding trigger gets a small fixed share.
+CAPTURE_LOOT_REASON_MAX             = {"post_kill": 60, "item_dot": 240}
 
 ENEMY_DOT_CONFIRM_THRESHOLD         = 2
 ENEMY_DOT_MATCH_RADIUS_PX           = _px(6)

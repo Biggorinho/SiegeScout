@@ -25,7 +25,6 @@ skills-lock.json
 
 # Local runtime outputs
 debug/
-.mcp.json
 # Written by the GUI on start/close — per-machine, not source
 settings.json
 
