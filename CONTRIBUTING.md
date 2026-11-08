@@ -2,6 +2,8 @@
 
 Contributions are welcome. Before starting substantial work, open an issue to
 describe the problem or proposed change so that effort is not duplicated.
+You can also join the [SiegeScout Discord server](https://discord.gg/VVM2UwdJQ4)
+for questions, discussion, and contributor coordination.
 
 ## Workflow
 
@@ -49,3 +51,6 @@ model instead.
 
 Describe the motivation, the approach, and how you tested the change. Screenshots
 are useful for GUI changes. Please be respectful and assume good intent.
+
+Use the Discord server for general discussion, but keep bug reports and
+reproducible technical issues in GitHub Issues so they remain searchable.

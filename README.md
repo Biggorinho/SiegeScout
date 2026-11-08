@@ -10,6 +10,12 @@ anti-cheat or platform rules.
 
 There is no account or license server required to run the open-source build.
 
+## Community
+
+SiegeScout is open source and community-driven. Join the
+[SiegeScout Discord server](https://discord.gg/VVM2UwdJQ4) to discuss the bot,
+report issues, share ideas, and coordinate development.
+
 ## Requirements
 
 - Windows 10 or later
