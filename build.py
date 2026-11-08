@@ -88,7 +88,7 @@ def check_dependencies():
     """
     import importlib
     required = ("onnxruntime", "rapidocr_onnxruntime", "cv2", "numpy",
-                "PIL", "mss", "keyboard", "httpx")
+                "PIL", "mss", "keyboard")
     missing = []
     for name in required:
         try:

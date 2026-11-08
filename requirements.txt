@@ -3,6 +3,14 @@ numpy>=1.21
 mss>=6.1
 keyboard>=0.13
 Pillow>=9.0
-httpx>=0.24
 onnxruntime>=1.20
 rapidocr-onnxruntime>=1.2
+
+# Tests
+pytest>=7.0
+
+# Optional: live session stats (gold/hr, zone buffs, item drops) via packet
+# capture in stats_tracker.py. Also needs Npcap (https://npcap.com) and an
+# elevated terminal (run.bat). Without these the bot runs normally and the
+# stats fall back to reading the save file. To enable, install them manually:
+#   python -m pip install "scapy>=2.5" "psutil>=5.9"

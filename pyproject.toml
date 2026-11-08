@@ -13,7 +13,6 @@ dependencies = [
     "mss>=6.1",
     "keyboard>=0.13",
     "Pillow>=9.0",
-    "httpx>=0.24",
     "onnxruntime>=1.20",
     "rapidocr-onnxruntime>=1.2",
 ]
@@ -25,26 +24,35 @@ dev = [
 build = [
     "nuitka>=1.8",
 ]
+# Live session stats via packet capture (stats_tracker.py); also needs Npcap.
+stats = [
+    "scapy>=2.5",
+    "psutil>=5.9",
+]
 
 [tool.setuptools]
+# Runtime modules reachable from main.py / gui.py. Dev tooling (build.py,
+# analyze_debug.py, eval/, tools/, training/) is run from the repo, not installed.
 py-modules = [
     "main",
     "gui",
     "combat",
     "config",
+    "debug_utils",
     "detectors",
-    "input_control",
-    "minimap",
-    "pathfinding",
-    "state",
-    "stats_tracker",
     "fusion",
-    "local_inference",
-    "targeting",
-    "satanic_name",
     "hud_ocr",
-    "build",
+    "input_control",
+    "local_inference",
+    "map_scroll",
+    "minimap",
+    "satanic_name",
+    "screen_motion",
+    "skills",
+    "stats_tracker",
+    "targeting",
 ]
+packages = ["pathfinding", "state"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

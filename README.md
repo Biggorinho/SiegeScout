@@ -35,6 +35,10 @@ python gui.py
 Alternatively, run `run.bat` from an elevated terminal when live stats need
 the additional permissions requested by the application.
 
+Live stats (gold/hr, zone buffs, item drops) are optional. They need
+[Npcap](https://npcap.com) plus `python -m pip install "scapy>=2.5" "psutil>=5.9"`;
+without them the bot runs normally.
+
 ## Development
 
 Run the test suite with:
