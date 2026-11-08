@@ -29,6 +29,7 @@ debug/
 settings.json
 
 # Secrets (keep out of source control)
+.env
 roboflow_key.txt
 
 eval/captures/**/*.png
